@@ -12,6 +12,7 @@ use dawnflow::{
     registry::HandlerRegistry,
 };
 use eyre::bail;
+use tokio::task::JoinSet;
 
 #[derive(Debug)]
 pub struct Consummable {
@@ -146,16 +147,23 @@ async fn main() {
     state.publisher.register_in_memory_backend(backend).await;
 
     let now = SystemTime::now();
-    for x in 0..100000000 {
-        state
-            .publisher
-            .pub_sub(Subscribable {
-                name: "test".into(),
-                id: x,
-            })
-            .await
-            .unwrap();
+    let mut js = JoinSet::new();
+    for i in 0..10 {
+        let state = state.clone();
+        js.spawn(async move {
+            for x in 0..1_000_000 {
+                state
+                    .publisher
+                    .pub_sub(Subscribable {
+                        name: "test".into(),
+                        id: x,
+                    })
+                    .await
+                    .unwrap();
+            }
+        });
     }
+    js.join_all().await;
     let after = SystemTime::now();
     let res = after - now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;

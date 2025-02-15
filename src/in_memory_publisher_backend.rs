@@ -1,9 +1,13 @@
 use std::{any::Any, collections::HashMap};
 
 use eyre::bail;
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{
+    sync::mpsc,
+    task::{JoinHandle, JoinSet},
+};
 
 use crate::{
+    handlers::Response,
     in_memory::{InMemoryMetadata, InMemoryPayload, InMemoryResponse},
     publisher::PublisherError,
     registry::{HandlerArc, HandlerRegistry},
@@ -78,46 +82,81 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
         // todo handle conjestions
         let con_state = state.clone();
         let consumer_join = tokio::spawn(async move {
-            while let Some((name, payload)) = cons_rx.recv().await {
-                let state = con_state.clone();
-                let Some(call) = consumers.get(&name) else {
-                    continue;
+            let mut join_set = JoinSet::<Response<InMemoryResponse>>::new();
+
+            loop {
+                while let Some(jh) = join_set.try_join_next() {
+                    match jh {
+                        Ok(x) => {
+                            //
+                        }
+                        Err(x) => {
+                            println!("{x}")
+                        }
+                    }
+                }
+
+                let Some((name, payload)) = cons_rx.recv().await else {
+                    todo!("implement shutdown handling")
                 };
 
-                let res = call
-                    .call(
+                let Some(call) = consumers.get(&name) else {
+                    todo!("handle error")
+                };
+
+                let state = con_state.clone();
+                let call = call.clone();
+                join_set.spawn(async move {
+                    call.call(
                         crate::handlers::HandlerRequest {
                             metadata: InMemoryMetadata {},
                             payload,
                         },
                         state,
                     )
-                    .await;
-                // TODO error handling
+                    .await
+                });
             }
         });
 
         let sub_state = state.clone();
         let subscriber_join = tokio::spawn(async move {
-            while let Some((name, payload)) = sub_rx.recv().await {
+            let mut join_set = JoinSet::<Response<InMemoryResponse>>::new();
+
+            loop {
+                while let Some(jh) = join_set.try_join_next() {
+                    match jh {
+                        Ok(x) => {
+                            //
+                        }
+                        Err(x) => {
+                            println!("{x}")
+                        }
+                    }
+                }
+
+                let Some((name, payload)) = sub_rx.recv().await else {
+                    todo!("implement shutdown handling")
+                };
+
                 let Some(calls) = subscribers.get(&name) else {
-                    continue;
+                    todo!("handle error")
                 };
 
                 for call in calls {
                     let state = sub_state.clone();
-                    let res = call
-                        .call(
+                    let payload = payload.get_any_clone();
+                    let call = call.clone();
+                    join_set.spawn(async move {
+                        call.call(
                             crate::handlers::HandlerRequest {
                                 metadata: InMemoryMetadata {},
-                                payload: InMemoryPayload {
-                                    payload: payload.get_any_clone(),
-                                },
+                                payload: InMemoryPayload { payload },
                             },
                             state,
                         )
-                        .await;
-                    // TODO error handling
+                        .await
+                    });
                 }
             }
         });
