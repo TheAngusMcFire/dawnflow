@@ -84,14 +84,15 @@ impl<T: Any> FromRequestBody<MyState, InMemoryPayload, InMemoryMetadata, InMemor
     type Rejection = Result<InMemoryResponse, eyre::Report>;
     async fn from_request(
         req: InMemoryPayload,
-        meta: &mut InMemoryMetadata,
+        _meta: &mut InMemoryMetadata,
         _state: &MyState,
     ) -> Result<Self, Self::Rejection> {
         match req.payload.downcast::<T>() {
-            Ok(x) => Ok(*x),
-            Err(_) => bail!("Unable to downcast payload to the target type"),
+            Ok(x) => Ok(Req(*x)),
+            Err(_) => Err(Err(eyre::eyre!(
+                "Unable to downcast payload to the target type"
+            ))),
         }
-        Ok(Req(todo!()))
     }
 }
 
