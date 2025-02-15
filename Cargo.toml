@@ -1,0 +1,8 @@
+[package]
+name = "dawnflow"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1.86"
+eyre = "0.6.12"
