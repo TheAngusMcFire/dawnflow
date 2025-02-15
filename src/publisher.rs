@@ -104,16 +104,13 @@ impl Publisher {
         }
     }
 
-    pub fn new_in_memory<S: 'static>(
+    pub async fn new_in_memory<S: Clone + Sync + Send + 'static>(
+        state: S,
         reg: HandlerRegistry<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>,
     ) -> Self {
         Self {
             backend: PublisherBackend::InMemory {
-                backend: Box::new(DefaultInMemoryPublisherBackend {
-                    handlers: reg.handlers,
-                    consumers: reg.consumers,
-                    subscribers: reg.subscribers,
-                }),
+                backend: Box::new(DefaultInMemoryPublisherBackend::new(state, reg).await),
             },
         }
     }
