@@ -2,11 +2,13 @@ use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
 use crate::handlers::{Handler, HandlerRequest, Response};
 
+pub type HandlerArc<P, M, S, R> = Arc<dyn HandlerCall<P, M, S, R> + Send + Sync>;
+
 pub struct HandlerRegistry<P, M, S, R> {
-    pub consumers: HashMap<String, Arc<dyn HandlerCall<P, M, S, R> + Send + Sync>>,
-    pub subscribers: HashMap<String, Vec<Arc<dyn HandlerCall<P, M, S, R> + Send + Sync>>>,
+    pub consumers: HashMap<String, HandlerArc<P, M, S, R>>,
+    pub subscribers: HashMap<String, Vec<HandlerArc<P, M, S, R>>>,
     /// for the requests
-    pub handlers: HashMap<String, Arc<dyn HandlerCall<P, M, S, R> + Send + Sync>>,
+    pub handlers: HashMap<String, HandlerArc<P, M, S, R>>,
 }
 
 impl<P, M, S, R> Default for HandlerRegistry<P, M, S, R> {

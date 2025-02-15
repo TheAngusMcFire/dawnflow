@@ -100,7 +100,7 @@ impl Publisher {
                 backend: Box::new(DefaultInMemoryPublisherBackend {
                     handlers: reg.handlers,
                     consumers: reg.consumers,
-                    subscriber: reg.subscribers,
+                    subscribers: reg.subscribers,
                 }),
             },
         }

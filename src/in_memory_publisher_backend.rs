@@ -3,7 +3,7 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 use crate::{
     in_memory::{InMemoryMetadata, InMemoryPayload, InMemoryResponse},
     publisher::PublisherError,
-    registry::HandlerCall,
+    registry::{HandlerArc, HandlerCall},
 };
 
 pub trait AnyCloneFactory: Send + Sync + 'static {
@@ -40,26 +40,13 @@ pub trait InMemoryPublisherBackend: Send + Sync {
 }
 
 pub struct DefaultInMemoryPublisherBackend<S> {
-    pub handlers: HashMap<
-        String,
-        Arc<dyn HandlerCall<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse> + Send + Sync>,
-    >,
-
-    pub consumers: HashMap<
-        String,
-        Arc<dyn HandlerCall<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse> + Send + Sync>,
-    >,
-
-    pub subscriber: HashMap<
-        String,
-        Vec<
-            Arc<
-                dyn HandlerCall<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>
-                    + Send
-                    + Sync,
-            >,
-        >,
-    >,
+    pub consumers:
+        HashMap<String, HandlerArc<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>>,
+    pub subscribers:
+        HashMap<String, Vec<HandlerArc<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>>>,
+    /// for the requests
+    pub handlers:
+        HashMap<String, HandlerArc<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>>,
 }
 
 #[async_trait::async_trait]
