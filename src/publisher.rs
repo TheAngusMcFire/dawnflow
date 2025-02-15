@@ -32,11 +32,6 @@ pub struct Publisher {
     backend: PublisherBackend,
 }
 
-pub(crate) struct SubscriberCloneFactory<T> {
-    pub factory: fn(&SubscriberCloneFactory<T>) -> Box<dyn Any + Send + Sync + 'static>,
-    pub obj: T,
-}
-
 // #[async_trait::async_trait]
 impl Publisher {
     #[cfg(not(feature = "in_memory_only"))]
@@ -62,6 +57,8 @@ impl Publisher {
         &self,
         msg: T,
     ) -> Result<(), PublisherError> {
+        use crate::in_memory_publisher_backend::SubscriberCloneFactory;
+
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };

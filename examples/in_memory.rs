@@ -82,7 +82,8 @@ impl<T: Any> FromRequestBody<MyState, InMemoryPayload, InMemoryMetadata, InMemor
 {
     type Rejection = Result<InMemoryResponse, eyre::Report>;
     async fn from_request(
-        req: HandlerRequest<InMemoryPayload, InMemoryMetadata>,
+        req: InMemoryPayload,
+        meta: &mut InMemoryMetadata,
         _state: &MyState,
     ) -> Result<Self, Self::Rejection> {
         Ok(Req(todo!()))

@@ -30,15 +30,12 @@ impl<T: Send + Sync + 'static> IntoResponse<InMemoryResponse> for Result<T, eyre
     }
 }
 
-pub struct InMemoryMetadata {}
-
-pub enum InMemoryPayloadKind {
-    Single(Box<dyn Any + Send + Sync + 'static>),
-    Cloneable(Box<dyn Any + Send + Sync + 'static>),
+pub struct InMemoryMetadata {
+    // pub payload_cloneable: Option<Box<dyn Any + Send + Sync + 'static>>,
 }
 
 pub struct InMemoryPayload {
-    pub payload_kind: InMemoryPayloadKind,
+    pub payload: Box<dyn Any + Send + Sync + 'static>,
 }
 
 pub struct InMemoryResponse {

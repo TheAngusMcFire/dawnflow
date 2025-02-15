@@ -43,7 +43,7 @@ pub trait FromRequestMetadata<S, M, R>: Sized {
 #[async_trait::async_trait]
 pub trait FromRequestBody<S, P, M, R, A = private::ViaRequest>: Sized {
     type Rejection: IntoResponse<R>;
-    async fn from_request(req: HandlerRequest<P, M>, state: &S) -> Result<Self, Self::Rejection>;
+    async fn from_request(req: P, meta: &mut M, state: &S) -> Result<Self, Self::Rejection>;
 }
 
 pub trait IntoResponse<P> {
@@ -175,9 +175,7 @@ macro_rules! impl_handler {
                         };
                     )*
 
-                    let req = HandlerRequest::from_comps(metadata, body);
-
-                    let $last = match $last::from_request(req, state).await {
+                    let $last = match $last::from_request(body, &mut metadata, state).await {
                         Ok(value) => value,
                         Err(rejection) => return rejection.into_response(),
                     };
