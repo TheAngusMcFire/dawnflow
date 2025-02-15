@@ -59,6 +59,10 @@ impl Publisher {
     ) -> Result<(), PublisherError> {
         use crate::in_memory_publisher_backend::SubscriberCloneFactory;
 
+        let name = std::any::type_name::<T>()
+            .split("::")
+            .last()
+            .expect("there shouln be at least one thingto the name");
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
@@ -66,7 +70,7 @@ impl Publisher {
             factory: |x| Box::new(x.obj.clone()),
             obj: msg,
         };
-        backend.pub_sub(Box::new(sub_fact)).await
+        backend.pub_sub(name, Box::new(sub_fact)).await
     }
 
     #[cfg(feature = "in_memory_only")]
@@ -74,7 +78,11 @@ impl Publisher {
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
-        backend.pub_cons(Box::new(msg)).await
+        let name = std::any::type_name::<T>()
+            .split("::")
+            .last()
+            .expect("there shouln be at least one thingto the name");
+        backend.pub_cons(name, Box::new(msg)).await
     }
 
     #[cfg(feature = "in_memory_only")]
@@ -85,7 +93,11 @@ impl Publisher {
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
-        let res = backend.pub_req(Box::new(msg)).await?;
+        let name = std::any::type_name::<TReq>()
+            .split("::")
+            .last()
+            .expect("there shouln be at least one thingto the name");
+        let res = backend.pub_req(name, Box::new(msg)).await?;
         match res.downcast::<TResp>() {
             Ok(x) => Ok(*x),
             Err(_) => Err(PublisherError::DowncastError),

@@ -25,16 +25,19 @@ impl<T: Send + Sync + 'static> AnyCloneFactory for SubscriberCloneFactory<T> {
 pub trait InMemoryPublisherBackend: Send + Sync {
     async fn pub_sub(
         &self,
+        name: &str,
         msg: Box<dyn AnyCloneFactory>,
     ) -> Result<(), crate::publisher::PublisherError>;
 
     async fn pub_cons(
         &self,
+        name: &str,
         msg: Box<dyn std::any::Any + Send + Sync + 'static>,
     ) -> Result<(), PublisherError>;
 
     async fn pub_req(
         &self,
+        name: &str,
         msg: Box<dyn std::any::Any + Send + Sync + 'static>,
     ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, PublisherError>;
 }
@@ -53,6 +56,7 @@ pub struct DefaultInMemoryPublisherBackend<S> {
 impl<S> InMemoryPublisherBackend for DefaultInMemoryPublisherBackend<S> {
     async fn pub_sub(
         &self,
+        name: &str,
         msg: Box<dyn AnyCloneFactory>,
     ) -> Result<(), crate::publisher::PublisherError> {
         // create payload and dispatch handler
@@ -67,6 +71,7 @@ impl<S> InMemoryPublisherBackend for DefaultInMemoryPublisherBackend<S> {
 
     async fn pub_cons(
         &self,
+        name: &str,
         msg: Box<dyn std::any::Any + Send + Sync + 'static>,
     ) -> Result<(), PublisherError> {
         todo!()
@@ -74,8 +79,10 @@ impl<S> InMemoryPublisherBackend for DefaultInMemoryPublisherBackend<S> {
 
     async fn pub_req(
         &self,
+        name: &str,
         msg: Box<dyn std::any::Any + Send + Sync + 'static>,
     ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, PublisherError> {
+        // self.handlers.
         todo!()
     }
 }

@@ -52,7 +52,7 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
         self,
         handler: H,
     ) -> Self {
-        let name = std::any::type_name::<H>()
+        let name = std::any::type_name::<T>()
             .split("::")
             .last()
             .expect("there shouln be at least one thingto the name");
@@ -66,7 +66,7 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
         self,
         handler: H,
     ) -> Self {
-        let name = std::any::type_name::<H>()
+        let name = std::any::type_name::<T>()
             .split("::")
             .last()
             .expect("there shouln be at least one thingto the name");
@@ -80,7 +80,7 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
         self,
         handler: H,
     ) -> Self {
-        let name = std::any::type_name::<H>()
+        let name = std::any::type_name::<T>()
             .split("::")
             .last()
             .expect("there shouln be at least one thingto the name");
