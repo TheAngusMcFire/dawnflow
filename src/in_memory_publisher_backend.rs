@@ -44,6 +44,22 @@ pub struct DefaultInMemoryPublisherBackend<S> {
         String,
         Arc<dyn HandlerCall<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse> + Send + Sync>,
     >,
+
+    pub consumers: HashMap<
+        String,
+        Arc<dyn HandlerCall<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse> + Send + Sync>,
+    >,
+
+    pub subscriber: HashMap<
+        String,
+        Vec<
+            Arc<
+                dyn HandlerCall<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>
+                    + Send
+                    + Sync,
+            >,
+        >,
+    >,
 }
 
 #[async_trait::async_trait]

@@ -6,6 +6,7 @@ use dawnflow::{
     publisher::Publisher,
     registry::HandlerRegistry,
 };
+use eyre::bail;
 
 #[derive(Debug)]
 pub struct Consummable {
@@ -86,6 +87,10 @@ impl<T: Any> FromRequestBody<MyState, InMemoryPayload, InMemoryMetadata, InMemor
         meta: &mut InMemoryMetadata,
         _state: &MyState,
     ) -> Result<Self, Self::Rejection> {
+        match req.payload.downcast::<T>() {
+            Ok(x) => Ok(*x),
+            Err(_) => bail!("Unable to downcast payload to the target type"),
+        }
         Ok(Req(todo!()))
     }
 }
