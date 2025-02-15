@@ -46,13 +46,14 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
     HandlerRegistry<P, M, S, R>
 {
     pub fn register_consumer<
+        TSub,
         T: Send + Sync + 'static,
         H: Handler<T, S, P, M, R> + Send + Sync + 'static,
     >(
         self,
         handler: H,
     ) -> Self {
-        let name = std::any::type_name::<T>()
+        let name = std::any::type_name::<TSub>()
             .split("::")
             .last()
             .expect("there shouln be at least one thingto the name");
@@ -60,13 +61,14 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
     }
 
     pub fn register_subscriber<
+        TSub,
         T: Send + Sync + 'static,
         H: Handler<T, S, P, M, R> + Send + Sync + 'static,
     >(
         self,
         handler: H,
     ) -> Self {
-        let name = std::any::type_name::<T>()
+        let name = std::any::type_name::<TSub>()
             .split("::")
             .last()
             .expect("there shouln be at least one thingto the name");
@@ -74,13 +76,14 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
     }
 
     pub fn register_handler<
+        TSub,
         T: Send + Sync + 'static,
         H: Handler<T, S, P, M, R> + Send + Sync + 'static,
     >(
         self,
         handler: H,
     ) -> Self {
-        let name = std::any::type_name::<T>()
+        let name = std::any::type_name::<TSub>()
             .split("::")
             .last()
             .expect("there shouln be at least one thingto the name");

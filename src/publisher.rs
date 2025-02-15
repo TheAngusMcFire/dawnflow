@@ -2,7 +2,7 @@
 // change serializer
 // different backends
 
-use std::any::Any;
+use tokio::sync::RwLock;
 
 use crate::{
     in_memory::{InMemoryMetadata, InMemoryPayload, InMemoryResponse},
@@ -14,6 +14,10 @@ use crate::{
 pub enum PublisherError {
     #[error("could not downcast response type to the actual type")]
     DowncastError,
+    #[error("endpoint not found: {0}")]
+    EndpointNotFound(String),
+    #[error("eyre report: {0}")]
+    Eyre(eyre::Report),
 }
 
 #[async_trait::async_trait]
@@ -21,7 +25,7 @@ pub trait BytePublisherBackend: Send + Sync {}
 
 pub enum PublisherBackend {
     InMemory {
-        backend: Box<dyn InMemoryPublisherBackend>,
+        backend: RwLock<Option<Box<dyn InMemoryPublisherBackend>>>,
     },
     ByteBackend {
         backend: Box<dyn BytePublisherBackend>,
@@ -70,7 +74,13 @@ impl Publisher {
             factory: |x| Box::new(x.obj.clone()),
             obj: msg,
         };
-        backend.pub_sub(name, Box::new(sub_fact)).await
+        backend
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .pub_sub(name, Box::new(sub_fact))
+            .await
     }
 
     #[cfg(feature = "in_memory_only")]
@@ -82,7 +92,13 @@ impl Publisher {
             .split("::")
             .last()
             .expect("there shouln be at least one thingto the name");
-        backend.pub_cons(name, Box::new(msg)).await
+        backend
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .pub_cons(name, Box::new(msg))
+            .await
     }
 
     #[cfg(feature = "in_memory_only")]
@@ -97,21 +113,36 @@ impl Publisher {
             .split("::")
             .last()
             .expect("there shouln be at least one thingto the name");
-        let res = backend.pub_req(name, Box::new(msg)).await?;
+        let res = backend
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .pub_req(name, Box::new(msg))
+            .await?;
         match res.downcast::<TResp>() {
             Ok(x) => Ok(*x),
             Err(_) => Err(PublisherError::DowncastError),
         }
     }
 
-    pub async fn new_in_memory<S: Clone + Sync + Send + 'static>(
-        state: S,
-        reg: HandlerRegistry<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>,
-    ) -> Self {
+    pub async fn new_in_memory() -> Self {
         Self {
             backend: PublisherBackend::InMemory {
-                backend: Box::new(DefaultInMemoryPublisherBackend::new(state, reg).await),
+                backend: RwLock::new(None),
             },
         }
+    }
+
+    pub async fn register_in_memory_backend(
+        &self,
+        new_backend: impl InMemoryPublisherBackend + 'static,
+    ) {
+        let PublisherBackend::InMemory { backend } = &self.backend else {
+            panic!("This function can only be used for Publishers with in memory backend");
+        };
+
+        let mut lock = backend.write().await;
+        *lock = Some(Box::new(new_backend));
     }
 }

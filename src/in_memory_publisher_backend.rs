@@ -1,5 +1,6 @@
 use std::{any::Any, collections::HashMap};
 
+use eyre::bail;
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
@@ -44,12 +45,13 @@ pub trait InMemoryPublisherBackend: Send + Sync {
     ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, PublisherError>;
 }
 
-pub struct DefaultInMemoryPublisherBackend<S: Sync + Send + 'static> {
+pub struct DefaultInMemoryPublisherBackend<S: Clone + Sync + Send + 'static> {
     // pub consumers:
     //     HashMap<String, HandlerArc<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>>,
     // pub subscribers:
     //     HashMap<String, Vec<HandlerArc<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>>>,
     /// for the requests
+    state: S,
     pub handlers:
         HashMap<String, HandlerArc<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>>,
     pub consumer_channel: tokio::sync::mpsc::Sender<(String, InMemoryPayload)>,
@@ -72,6 +74,8 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
         mut sub_rx: tokio::sync::mpsc::Receiver<(String, Box<dyn AnyCloneFactory>)>,
         mut cons_rx: tokio::sync::mpsc::Receiver<(String, InMemoryPayload)>,
     ) -> (JoinHandle<()>, JoinHandle<()>) {
+        // todo use joinsets to execute incoming requests in parallel
+        // todo handle conjestions
         let con_state = state.clone();
         let consumer_join = tokio::spawn(async move {
             while let Some((name, payload)) = cons_rx.recv().await {
@@ -79,6 +83,7 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
                 let Some(call) = consumers.get(&name) else {
                     continue;
                 };
+
                 let res = call
                     .call(
                         crate::handlers::HandlerRequest {
@@ -98,6 +103,7 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
                 let Some(calls) = subscribers.get(&name) else {
                     continue;
                 };
+
                 for call in calls {
                     let state = sub_state.clone();
                     let res = call
@@ -111,8 +117,8 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
                             state,
                         )
                         .await;
+                    // TODO error handling
                 }
-                // println!("GOT = {}", message);
             }
         });
 
@@ -128,7 +134,7 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
             mpsc::channel::<(String, Box<dyn AnyCloneFactory>)>(1000);
 
         let (con_join, sub_join) = DefaultInMemoryPublisherBackend::start_dispatcher(
-            state,
+            state.clone(),
             reg.consumers,
             reg.subscribers,
             subscriber_rx,
@@ -137,6 +143,7 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
         .await;
 
         DefaultInMemoryPublisherBackend {
+            state: state.clone(),
             handlers: reg.handlers,
             consumer_channel: consumer_tx,
             subscriber_channel: subscriber_tx,
@@ -147,7 +154,9 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
 }
 
 #[async_trait::async_trait]
-impl<S: Sync + Send + 'static> InMemoryPublisherBackend for DefaultInMemoryPublisherBackend<S> {
+impl<S: Clone + Sync + Send + 'static> InMemoryPublisherBackend
+    for DefaultInMemoryPublisherBackend<S>
+{
     async fn pub_sub(
         &self,
         name: &str,
@@ -165,7 +174,11 @@ impl<S: Sync + Send + 'static> InMemoryPublisherBackend for DefaultInMemoryPubli
         name: &str,
         msg: Box<dyn std::any::Any + Send + Sync + 'static>,
     ) -> Result<(), PublisherError> {
-        todo!()
+        self.consumer_channel
+            .send((name.to_string(), InMemoryPayload { payload: msg }))
+            .await
+            .unwrap();
+        Ok(())
     }
 
     async fn pub_req(
@@ -173,7 +186,30 @@ impl<S: Sync + Send + 'static> InMemoryPublisherBackend for DefaultInMemoryPubli
         name: &str,
         msg: Box<dyn std::any::Any + Send + Sync + 'static>,
     ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, PublisherError> {
-        // self.handlers.
-        todo!()
+        let Some(call) = self.handlers.get(name) else {
+            return Err(PublisherError::EndpointNotFound(name.to_string()));
+        };
+        let ret = call
+            .call(
+                crate::handlers::HandlerRequest {
+                    metadata: InMemoryMetadata {},
+                    payload: InMemoryPayload { payload: msg },
+                },
+                self.state.clone(),
+            )
+            .await;
+
+        if let Some(report) = ret.report {
+            return Err(PublisherError::Eyre(report));
+        }
+
+        if !ret.success {
+            return Err(PublisherError::Eyre(eyre::eyre!(
+                "The response did not indicate success, but also did not provide any Report"
+            )));
+        }
+
+        let payload = ret.payload.unwrap();
+        Ok(payload.response.unwrap())
     }
 }
