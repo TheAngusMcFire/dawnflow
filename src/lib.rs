@@ -1,9 +1,14 @@
 pub mod handlers;
 pub mod in_memory;
+pub mod in_memory_publisher_backend;
 pub mod publisher;
 pub mod registry;
 
+#[cfg(all(feature = "in_memory", feature = "nats"))]
+compile_error!("features `feature/in_memory` and `feature/nats` are mutually exclusive");
+
 // use std::{
+
 //     any::Any,
 //     collections::{HashMap, HashSet},
 //     sync::Arc,

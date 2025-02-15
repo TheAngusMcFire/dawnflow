@@ -1,11 +1,13 @@
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 use dawnflow::{
-    handlers::{FromRequestBody, HandlerRequest},
+    handlers::{FromRequestBody, FromRequestMetadata, HandlerRequest},
     in_memory::{InMemoryMetadata, InMemoryPayload, InMemoryResponse},
+    publisher::Publisher,
     registry::HandlerRegistry,
 };
 
+#[derive(Debug)]
 pub struct Consummable {
     name: String,
     id: usize,
@@ -32,11 +34,20 @@ pub struct Response2 {
     id: usize,
 }
 
-pub async fn subscriber(Req(_sub): Req<Subscribable>) -> eyre::Result<()> {
+pub async fn subscriber(state: MyState, Req(_sub): Req<Subscribable>) -> eyre::Result<()> {
+    state
+        .publisher
+        .pub_cons(Consummable {
+            name: "some name".into(),
+            id: 24,
+        })
+        .await?;
+
     Ok(())
 }
 
-pub async fn consumer(Req(_sub): Req<Consummable>) -> eyre::Result<()> {
+pub async fn consumer(Req(sub): Req<Consummable>) -> eyre::Result<()> {
+    println!("{:?}", sub);
     Ok(())
 }
 
@@ -48,7 +59,21 @@ pub async fn request2(Req(_sub): Req<Request2>) -> eyre::Result<Response2> {
     Ok(Response2 { id: 124 })
 }
 
-pub struct MyState {}
+#[derive(Clone)]
+pub struct MyState {
+    publisher: Arc<Publisher>,
+}
+
+#[async_trait::async_trait]
+impl FromRequestMetadata<MyState, InMemoryMetadata, InMemoryResponse> for MyState {
+    type Rejection = Result<InMemoryResponse, eyre::Report>;
+    async fn from_request_metadata(
+        _req: &mut InMemoryMetadata,
+        state: &MyState,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(state.clone())
+    }
+}
 
 pub struct Req<T>(T);
 #[async_trait::async_trait]
@@ -60,17 +85,18 @@ impl<T: Any> FromRequestBody<MyState, InMemoryPayload, InMemoryMetadata, InMemor
         req: HandlerRequest<InMemoryPayload, InMemoryMetadata>,
         _state: &MyState,
     ) -> Result<Self, Self::Rejection> {
-        Ok(Req(*req.payload.payload.downcast::<T>().unwrap()))
+        Ok(Req(todo!()))
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let handlers =
         HandlerRegistry::<InMemoryPayload, InMemoryMetadata, MyState, InMemoryResponse>::default();
     handlers
-        .register(subscriber)
-        .register(subscriber)
-        .register(request1)
-        .register(request2);
+        .register_subscriber(subscriber)
+        .register_consumer(consumer)
+        .register_handler(request1)
+        .register_handler(request2);
     println!("this is the in memory example")
 }

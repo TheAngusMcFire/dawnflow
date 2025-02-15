@@ -3,6 +3,9 @@ use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 use crate::handlers::{Handler, HandlerRequest, Response};
 
 pub struct HandlerRegistry<P, M, S, R> {
+    pub consumers: HashMap<String, Arc<dyn HandlerCall<P, M, S, R> + Send + Sync>>,
+    pub subscribers: HashMap<String, Vec<Arc<dyn HandlerCall<P, M, S, R> + Send + Sync>>>,
+    /// for the requests
     pub handlers: HashMap<String, Arc<dyn HandlerCall<P, M, S, R> + Send + Sync>>,
 }
 
@@ -10,6 +13,8 @@ impl<P, M, S, R> Default for HandlerRegistry<P, M, S, R> {
     fn default() -> Self {
         Self {
             handlers: Default::default(),
+            consumers: Default::default(),
+            subscribers: Default::default(),
         }
     }
 }
@@ -38,7 +43,10 @@ impl<
 impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
     HandlerRegistry<P, M, S, R>
 {
-    pub fn register<T: Send + Sync + 'static, H: Handler<T, S, P, M, R> + Send + Sync + 'static>(
+    pub fn register_consumer<
+        T: Send + Sync + 'static,
+        H: Handler<T, S, P, M, R> + Send + Sync + 'static,
+    >(
         self,
         handler: H,
     ) -> Self {
@@ -46,10 +54,75 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
             .split("::")
             .last()
             .expect("there shouln be at least one thingto the name");
-        self.register_with_name(name, handler)
+        self.register_consumer_with_name(name, handler)
     }
 
-    pub fn register_with_name<
+    pub fn register_subscriber<
+        T: Send + Sync + 'static,
+        H: Handler<T, S, P, M, R> + Send + Sync + 'static,
+    >(
+        self,
+        handler: H,
+    ) -> Self {
+        let name = std::any::type_name::<H>()
+            .split("::")
+            .last()
+            .expect("there shouln be at least one thingto the name");
+        self.register_subscriber_with_name(name, handler)
+    }
+
+    pub fn register_handler<
+        T: Send + Sync + 'static,
+        H: Handler<T, S, P, M, R> + Send + Sync + 'static,
+    >(
+        self,
+        handler: H,
+    ) -> Self {
+        let name = std::any::type_name::<H>()
+            .split("::")
+            .last()
+            .expect("there shouln be at least one thingto the name");
+        self.register_handler_with_name(name, handler)
+    }
+
+    pub fn register_consumer_with_name<
+        N: Into<String>,
+        T: Send + Sync + 'static,
+        H: Handler<T, S, P, M, R> + Send + Sync + 'static,
+    >(
+        mut self,
+        name: N,
+        handler: H,
+    ) -> Self {
+        self.consumers.insert(
+            name.into(),
+            Arc::new(HandlerEndpoint {
+                handler,
+                pd: Default::default(),
+            }),
+        );
+        self
+    }
+
+    pub fn register_subscriber_with_name<
+        N: Into<String>,
+        T: Send + Sync + 'static,
+        H: Handler<T, S, P, M, R> + Send + Sync + 'static,
+    >(
+        mut self,
+        name: N,
+        handler: H,
+    ) -> Self {
+        let name = name.into();
+        let entry = self.subscribers.entry(name).or_default();
+        entry.push(Arc::new(HandlerEndpoint {
+            handler,
+            pd: Default::default(),
+        }));
+        self
+    }
+
+    pub fn register_handler_with_name<
         N: Into<String>,
         T: Send + Sync + 'static,
         H: Handler<T, S, P, M, R> + Send + Sync + 'static,

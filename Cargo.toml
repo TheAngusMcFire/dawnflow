@@ -3,6 +3,22 @@ name = "dawnflow"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["in_memory_only"]
+in_memory = []
+in_memory_only = ["in_memory"]
+nats=[]
+
 [dependencies]
-async-trait = "0.1.86"
-eyre = "0.6.12"
+async-trait = "0.1"
+eyre = "0.6"
+serde = "1"
+thiserror = "2"
+tokio = { version = "1.43.0", features = ["full"] }
+
+
+
+[[example]]
+name = "in_memory"
+path = "examples/in_memory.rs"
+required-features = ["in_memory_only"]
