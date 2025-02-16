@@ -170,8 +170,7 @@ impl Publisher {
             PublisherBackend::ByteBackend { backend } => {
                 let data = self.serialize_req(&msg)?;
                 let res = backend.pub_req(name, data).await?;
-                let obj = self.de_serialize_req::<TResp>(res.as_slice())?;
-                return Ok(obj);
+                Ok(self.de_serialize_req::<TResp>(res.as_slice())?)
             }
         }
     }
