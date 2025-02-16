@@ -10,10 +10,22 @@ pub enum PublisherError {
     EndpointNotFound(String),
     #[error("eyre report: {0}")]
     Eyre(eyre::Report),
+    #[error("serialize error: {0}")]
+    Serde(String),
 }
 
 #[async_trait::async_trait]
-pub trait BytePublisherBackend: Send + Sync {}
+pub trait BytePublisherBackend: Send + Sync {
+    async fn pub_sub(
+        &self,
+        name: &str,
+        msg: Vec<u8>,
+    ) -> Result<(), crate::publisher::PublisherError>;
+
+    async fn pub_cons(&self, name: &str, msg: Vec<u8>) -> Result<(), PublisherError>;
+
+    async fn pub_req(&self, name: &str, msg: Vec<u8>) -> Result<Vec<u8>, PublisherError>;
+}
 
 pub enum PublisherBackend {
     InMemory {
@@ -24,27 +36,144 @@ pub enum PublisherBackend {
     },
 }
 
+pub enum PublisherSerializer {
+    InMemory,
+    Binary,
+    Json,
+}
+
 pub struct Publisher {
     backend: PublisherBackend,
+    serializer: PublisherSerializer,
 }
 
 impl Publisher {
-    #[cfg(not(feature = "in_memory_only"))]
-    pub async fn pub_sub<T: serde::Serialize>(&self, msg: T) -> Result<(), PublisherError> {
-        todo!()
+    pub fn get_obj_name<T>() -> &'static str {
+        std::any::type_name::<T>()
+            .split("::")
+            .last()
+            .expect("there shouln be at least one thingto the name")
+    }
+
+    pub fn serialize_req<T: serde::Serialize>(&self, req: &T) -> Result<Vec<u8>, PublisherError> {
+        // https://lib.rs/crates/serde_bytes
+        match self.serializer {
+            PublisherSerializer::InMemory => panic!(),
+            PublisherSerializer::Binary => {
+                let mut data = Vec::new();
+                req.serialize(&mut rmp_serde::Serializer::new(&mut data))
+                    .map_err(|x| PublisherError::Serde(x.to_string()))?;
+                Ok(data)
+            }
+            PublisherSerializer::Json => {
+                let data =
+                    serde_json::to_vec(req).map_err(|x| PublisherError::Serde(x.to_string()))?;
+                Ok(data)
+            }
+        }
+    }
+
+    pub fn de_serialize_req<T: serde::de::DeserializeOwned>(
+        &self,
+        data: &[u8],
+    ) -> Result<T, PublisherError> {
+        // https://lib.rs/crates/serde_bytes
+        match self.serializer {
+            PublisherSerializer::InMemory => panic!(),
+            PublisherSerializer::Binary => Ok(
+                rmp_serde::from_slice(data).map_err(|x| PublisherError::Serde(x.to_string()))?
+            ),
+            PublisherSerializer::Json => {
+                Ok(serde_json::from_slice(data)
+                    .map_err(|x| PublisherError::Serde(x.to_string()))?)
+            }
+        }
     }
 
     #[cfg(not(feature = "in_memory_only"))]
-    pub async fn pub_cons<T: serde::Serialize>(&self, msg: T) -> Result<(), PublisherError> {
-        todo!()
+    pub async fn pub_sub<T: Clone + serde::Serialize + Send + Sync + 'static>(
+        &self,
+        msg: T,
+    ) -> Result<(), PublisherError> {
+        use crate::in_memory_publisher_backend::SubscriberCloneFactory;
+
+        let name = Self::get_obj_name::<T>();
+        match &self.backend {
+            PublisherBackend::InMemory { backend } => {
+                let sub_fact = SubscriberCloneFactory::<T> {
+                    factory: |x| Box::new(x.obj.clone()),
+                    obj: msg,
+                };
+                backend
+                    .read()
+                    .await
+                    .as_ref()
+                    .unwrap()
+                    .pub_sub(name, Box::new(sub_fact))
+                    .await?;
+            }
+            PublisherBackend::ByteBackend { backend } => {
+                let data = self.serialize_req(&msg)?;
+                backend.pub_sub(name, data).await?;
+            }
+        }
+        Ok(())
     }
 
     #[cfg(not(feature = "in_memory_only"))]
-    pub async fn pub_req<TReq: serde::Serialize, TResp: serde::de::DeserializeOwned>(
+    pub async fn pub_cons<T: serde::Serialize + Send + Sync + 'static>(
+        &self,
+        msg: T,
+    ) -> Result<(), PublisherError> {
+        let name = Self::get_obj_name::<T>();
+        match &self.backend {
+            PublisherBackend::InMemory { backend } => {
+                backend
+                    .read()
+                    .await
+                    .as_ref()
+                    .unwrap()
+                    .pub_cons(name, Box::new(msg))
+                    .await?;
+            }
+            PublisherBackend::ByteBackend { backend } => {
+                let data = self.serialize_req(&msg)?;
+                backend.pub_cons(name, data).await?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "in_memory_only"))]
+    pub async fn pub_req<
+        TReq: serde::Serialize + Send + Sync + 'static,
+        TResp: serde::de::DeserializeOwned + Send + Sync + 'static,
+    >(
         &self,
         msg: TReq,
     ) -> Result<TResp, PublisherError> {
-        todo!()
+        let name = Self::get_obj_name::<TReq>();
+        match &self.backend {
+            PublisherBackend::InMemory { backend } => {
+                let res = backend
+                    .read()
+                    .await
+                    .as_ref()
+                    .unwrap()
+                    .pub_req(name, Box::new(msg))
+                    .await?;
+                return match res.downcast::<TResp>() {
+                    Ok(x) => Ok(*x),
+                    Err(_) => Err(PublisherError::DowncastError),
+                };
+            }
+            PublisherBackend::ByteBackend { backend } => {
+                let data = self.serialize_req(&msg)?;
+                let res = backend.pub_req(name, data).await?;
+                let obj = self.de_serialize_req::<TResp>(res.as_slice())?;
+                return Ok(obj);
+            }
+        }
     }
 
     #[cfg(feature = "in_memory_only")]
@@ -54,10 +183,7 @@ impl Publisher {
     ) -> Result<(), PublisherError> {
         use crate::in_memory_publisher_backend::SubscriberCloneFactory;
 
-        let name = std::any::type_name::<T>()
-            .split("::")
-            .last()
-            .expect("there shouln be at least one thingto the name");
+        let name = Self::get_obj_name::<T>();
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
@@ -79,10 +205,7 @@ impl Publisher {
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
-        let name = std::any::type_name::<T>()
-            .split("::")
-            .last()
-            .expect("there shouln be at least one thingto the name");
+        let name = Self::get_obj_name::<T>();
         backend
             .read()
             .await
@@ -100,10 +223,7 @@ impl Publisher {
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
-        let name = std::any::type_name::<TReq>()
-            .split("::")
-            .last()
-            .expect("there shouln be at least one thingto the name");
+        let name = Self::get_obj_name::<T>();
         let res = backend
             .read()
             .await
@@ -122,6 +242,7 @@ impl Publisher {
             backend: PublisherBackend::InMemory {
                 backend: RwLock::new(None),
             },
+            serializer: PublisherSerializer::InMemory,
         }
     }
 

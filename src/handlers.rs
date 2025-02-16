@@ -26,6 +26,7 @@ pub trait Handler<T, S, P, M, R>: Clone + Send + Sized + 'static {
 
 // those 2 types are used for some black magic to distinguish between empty handlers and handlers with parameters
 mod private {
+    #[allow(dead_code)]
     #[derive(Debug, Clone, Copy)]
     pub enum ViaMetadata {}
 
