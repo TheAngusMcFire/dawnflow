@@ -56,16 +56,31 @@ pub struct DefaultInMemoryPublisherBackend<S: Clone + Sync + Send + 'static> {
     subscriber_channel: tokio::sync::mpsc::Sender<(String, Box<dyn AnyCloneFactory>)>,
 }
 
-async fn dummy<T>() -> Option<Result<T, JoinError>> {
-    None
-}
-
 impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
     pub fn handle_join_result(res: Result<Response<InMemoryResponse>, JoinError>) {
         match res {
-            Ok(_) => todo!(),
-            Err(x) if x.is_cancelled() => {}
-            Err(x) if x.is_panic() => {}
+            Ok(Response {
+                error_scope: _,
+                success: false,
+                report: Some(report),
+                payload: None,
+            }) => {
+                tracing::error!("Error during handling of request: {report}");
+            }
+            Ok(Response {
+                error_scope: _,
+                success: true,
+                report: _,
+                payload: _,
+            }) => {
+                tracing::debug!("Request handled successfully");
+            }
+            Err(x) if x.is_cancelled() => {
+                tracing::error!("Request was cancelled")
+            }
+            Err(x) if x.is_panic() => {
+                tracing::error!("Panic processing of request")
+            }
             _ => {
                 tracing::error!("Unexpected Error during processing of request")
             }

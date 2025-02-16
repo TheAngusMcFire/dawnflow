@@ -47,7 +47,6 @@ pub struct Response2 {
 }
 
 pub async fn subscriber(state: MyState, Req(_sub): Req<Subscribable>) -> eyre::Result<()> {
-    // println!("subscriber function");
     state
         .publisher
         .pub_cons(Consummable {
@@ -60,34 +59,26 @@ pub async fn subscriber(state: MyState, Req(_sub): Req<Subscribable>) -> eyre::R
 }
 
 pub async fn consumer(state: MyState, Req(sub): Req<Consummable>) -> eyre::Result<()> {
-    // println!("consumer function");
-    // println!("{:?}", sub);
     let resp: Response1 = state
         .publisher
         .pub_req(Request1 {
             name: "msg1".into(),
         })
         .await?;
-    // println!("{:?}", resp);
     Ok(())
 }
 
 pub async fn request1(state: MyState, Req(sub): Req<Request1>) -> eyre::Result<Response1> {
-    // println!("request1 function");
-    // println!("{:?}", sub);
     let resp: Response2 = state
         .publisher
         .pub_req(Request2 {
             name: "msg1".into(),
         })
         .await?;
-    // println!("{:?}", resp);
     Ok(Response1 { id: 24 })
 }
 
 pub async fn request2(state: MyState, Req(sub): Req<Request2>) -> eyre::Result<Response2> {
-    // println!("request2 function");
-    // println!("{:?}", sub);
     Ok(Response2 { id: 124 })
 }
 
@@ -140,7 +131,6 @@ async fn main() {
 
     tracing::subscriber::set_global_default(tr_sub).unwrap();
 
-    tracing::debug!("start");
     let handlers =
         HandlerRegistry::<InMemoryPayload, InMemoryMetadata, MyState, InMemoryResponse>::default();
 
@@ -158,32 +148,18 @@ async fn main() {
 
     state.publisher.register_in_memory_backend(backend).await;
 
+    for x in 0..1_000_000 {
+        state
+            .publisher
+            .pub_sub(Subscribable {
+                name: "test".into(),
+                id: x,
+            })
+            .await
+            .unwrap();
+    }
+
     elegant_departure::tokio::depart().on_termination().await;
     tracing::warn!("shutting down service");
     join_set.join_all().await;
-
-    // let now = SystemTime::now();
-    // let mut js = JoinSet::new();
-    // for i in 0..10 {
-    //     let state = state.clone();
-    //     js.spawn(async move {
-    //         for x in 0..1_000_000 {
-    //             state
-    //                 .publisher
-    //                 .pub_sub(Subscribable {
-    //                     name: "test".into(),
-    //                     id: x,
-    //                 })
-    //                 .await
-    //                 .unwrap();
-    //         }
-    //     });
-    // }
-    // js.join_all().await;
-    // let after = SystemTime::now();
-    // let res = after - now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
-    // tokio::time::sleep(Duration::from_secs(1)).await;
-    // tracing::info!("{res:?}");
-
-    // tokio::time::sleep(Duration::from_secs(100)).await;
 }
