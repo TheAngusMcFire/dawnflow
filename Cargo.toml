@@ -11,7 +11,7 @@ nats=[]
 
 [dependencies]
 async-trait = "0.1"
-elegant-departure = "0.3.1"
+elegant-departure = { version = "0.3", features = ["tokio"] }
 eyre = "0.6"
 serde = "1"
 thiserror = "2"

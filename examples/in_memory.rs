@@ -158,6 +158,8 @@ async fn main() {
 
     state.publisher.register_in_memory_backend(backend).await;
 
+    elegant_departure::tokio::depart().on_termination().await;
+    tracing::warn!("shutting down service");
     join_set.join_all().await;
 
     // let now = SystemTime::now();
@@ -184,6 +186,4 @@ async fn main() {
     // tracing::info!("{res:?}");
 
     // tokio::time::sleep(Duration::from_secs(100)).await;
-
-    println!("this is the in memory example")
 }

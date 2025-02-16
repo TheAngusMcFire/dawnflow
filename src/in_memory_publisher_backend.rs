@@ -56,8 +56,21 @@ pub struct DefaultInMemoryPublisherBackend<S: Clone + Sync + Send + 'static> {
     subscriber_channel: tokio::sync::mpsc::Sender<(String, Box<dyn AnyCloneFactory>)>,
 }
 
+async fn dummy<T>() -> Option<Result<T, JoinError>> {
+    None
+}
+
 impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
-    pub fn handle_join_result(res: Result<Response<InMemoryResponse>, JoinError>) {}
+    pub fn handle_join_result(res: Result<Response<InMemoryResponse>, JoinError>) {
+        match res {
+            Ok(_) => todo!(),
+            Err(x) if x.is_cancelled() => {}
+            Err(x) if x.is_panic() => {}
+            _ => {
+                tracing::error!("Unexpected Error during processing of request")
+            }
+        };
+    }
 
     pub async fn start_dispatcher(
         state: S,
@@ -73,7 +86,6 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
         mut cons_rx: tokio::sync::mpsc::Receiver<(String, InMemoryPayload)>,
         mut join_set: JoinSet<()>,
     ) -> JoinSet<()> {
-        // todo use joinsets to execute incoming requests in parallel
         // todo handle conjestions
         let con_state = state.clone();
         join_set.spawn(async move {
@@ -84,8 +96,8 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
                 let (name, payload) = if !join_set.is_empty() {
                     select! {
                         Some(r) = cons_rx.recv() => r,
-                        Some(jh) = join_set.join_next() => {
-                            DefaultInMemoryPublisherBackend::<S>::handle_join_result(jh);
+                        jh = join_set.join_next() => {
+                            DefaultInMemoryPublisherBackend::<S>::handle_join_result(jh.expect("can not happen here"));
                             continue;
                         },
                         _ = guard.wait() => {
@@ -114,7 +126,8 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
                 };
 
                 let Some(call) = consumers.get(&name) else {
-                    todo!("handle error")
+                    tracing::error!("Consumer handler: {name} not found, ignore incoming request");
+                    continue;
                 };
 
                 let state = con_state.clone();
@@ -130,6 +143,7 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
                     .await
                 });
             }
+            tracing::info!("shutdown the consumer dispatcher");
         });
 
         let sub_state = state.clone();
@@ -138,33 +152,41 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
             let mut join_set = JoinSet::<Response<InMemoryResponse>>::new();
 
             loop {
-                let (name, payload) = select! {
-                    r = sub_rx.recv() => {
-                        let Some(p) = r else {
-                            tracing::debug!("stop");
-                            break
-                        };
-                        p
-                    },
-                    Some(jh) = join_set.join_next() => {
-                        // let Some(jh) = jh else {
-                        //     tracing::debug!("stop");
-                        //     continue;
-                        // };
-                        DefaultInMemoryPublisherBackend::<S>::handle_join_result(jh);
-                        continue;
-                    },
-                    _ = guard.wait() => {
-                        while let Some(r) = join_set.join_next().await {
-                            DefaultInMemoryPublisherBackend::<S>::handle_join_result(r);
+                let (name, payload) = if !join_set.is_empty() {
+                    select! {
+                        Some(r) = sub_rx.recv() => r,
+                        jh = join_set.join_next() => {
+                            DefaultInMemoryPublisherBackend::<S>::handle_join_result(jh.expect("can not happen here"));
+                            continue;
+                        },
+                        _ = guard.wait() => {
+                            while let Some(r) = join_set.join_next().await {
+                                DefaultInMemoryPublisherBackend::<S>::handle_join_result(r);
+                            }
+                            break;
+                        },
+                        else => {
+                            break;
                         }
-                        break;
-                            tracing::debug!("stop");
-                    },
+                    }
+                } else {
+                    select! {
+                        Some(r) = sub_rx.recv() => r,
+                        _ = guard.wait() => {
+                            while let Some(r) = join_set.join_next().await {
+                                DefaultInMemoryPublisherBackend::<S>::handle_join_result(r);
+                            }
+                            break;
+                        },
+                        else => {
+                            break;
+                        }
+                    }
                 };
 
                 let Some(calls) = subscribers.get(&name) else {
-                    todo!("handle error")
+                    tracing::error!("Subscriber handler: {name} not found, ignore incoming request");
+                    continue;
                 };
 
                 for call in calls {
@@ -183,6 +205,8 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
                     });
                 }
             }
+
+            tracing::info!("shutdown the subscriber dispatcher");
         });
 
         join_set
