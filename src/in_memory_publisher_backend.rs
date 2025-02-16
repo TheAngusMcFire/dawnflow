@@ -109,6 +109,9 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
             let mut join_set = JoinSet::<Response<InMemoryResponse>>::new();
 
             loop {
+                while let Some(x) = join_set.try_join_next() {
+                    DefaultInMemoryPublisherBackend::<S>::handle_join_result(x);
+                }
                 let (name, payload) = if !join_set.is_empty() {
                     select! {
                         Some(r) = cons_rx.recv() => r,
@@ -169,6 +172,9 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
             let mut join_set = JoinSet::<Response<InMemoryResponse>>::new();
 
             loop {
+                while let Some(x) = join_set.try_join_next() {
+                    DefaultInMemoryPublisherBackend::<S>::handle_join_result(x);
+                }
                 let (name, payload) = if !join_set.is_empty() {
                     select! {
                         Some(r) = sub_rx.recv() => r,

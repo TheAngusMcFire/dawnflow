@@ -153,7 +153,10 @@ async fn main() {
             .unwrap();
     }
 
-    elegant_departure::tokio::depart().on_termination().await;
+    elegant_departure::tokio::depart()
+        // .on_completion(join_set.join_all())
+        .on_termination()
+        .await;
     tracing::warn!("shutting down service");
     join_set.join_all().await;
 }
