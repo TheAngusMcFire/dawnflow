@@ -3,7 +3,7 @@ use std::{any::Any, collections::HashMap};
 use tokio::{
     select,
     sync::mpsc,
-    task::{JoinError, JoinHandle, JoinSet},
+    task::{JoinError, JoinSet},
 };
 
 use crate::{

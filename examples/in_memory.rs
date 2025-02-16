@@ -1,18 +1,15 @@
 use std::{
     any::Any,
     sync::Arc,
-    time::{Duration, SystemTime},
 };
 
 use dawnflow::{
-    handlers::{FromRequestBody, FromRequestMetadata, HandlerRequest},
+    handlers::{FromRequestBody, FromRequestMetadata},
     in_memory::{InMemoryMetadata, InMemoryPayload, InMemoryResponse},
     in_memory_publisher_backend::DefaultInMemoryPublisherBackend,
     publisher::Publisher,
     registry::HandlerRegistry,
 };
-use eyre::bail;
-use tokio::task::JoinSet;
 
 #[derive(Debug)]
 pub struct Consummable {
