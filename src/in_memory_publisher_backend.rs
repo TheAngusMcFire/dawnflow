@@ -58,6 +58,7 @@ pub struct DefaultInMemoryPublisherBackend<S: Clone + Sync + Send + 'static> {
 
 impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
     pub fn handle_join_result(res: Result<Response<InMemoryResponse>, JoinError>) {
+        // TODO do something with the error result e.g. publish to a error handler
         match res {
             Ok(Response {
                 error_scope: _,
@@ -141,6 +142,7 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
                 };
 
                 let Some(call) = consumers.get(&name) else {
+                    // TODO do something with the error result e.g. publish to a error handler
                     tracing::error!("Consumer handler: {name} not found, ignore incoming request");
                     continue;
                 };
@@ -200,6 +202,7 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
                 };
 
                 let Some(calls) = subscribers.get(&name) else {
+                    // TODO do something with the error result e.g. publish to a error handler
                     tracing::error!("Subscriber handler: {name} not found, ignore incoming request");
                     continue;
                 };
