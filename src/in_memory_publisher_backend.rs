@@ -1,6 +1,5 @@
 use std::{any::Any, collections::HashMap};
 
-use eyre::bail;
 use tokio::{
     sync::mpsc,
     task::{JoinHandle, JoinSet},
@@ -50,18 +49,10 @@ pub trait InMemoryPublisherBackend: Send + Sync {
 }
 
 pub struct DefaultInMemoryPublisherBackend<S: Clone + Sync + Send + 'static> {
-    // pub consumers:
-    //     HashMap<String, HandlerArc<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>>,
-    // pub subscribers:
-    //     HashMap<String, Vec<HandlerArc<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>>>,
-    /// for the requests
     state: S,
-    pub handlers:
-        HashMap<String, HandlerArc<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>>,
-    pub consumer_channel: tokio::sync::mpsc::Sender<(String, InMemoryPayload)>,
-    pub subscriber_channel: tokio::sync::mpsc::Sender<(String, Box<dyn AnyCloneFactory>)>,
-    pub sub_join_handle: JoinHandle<()>,
-    pub cons_join_handle: JoinHandle<()>,
+    handlers: HashMap<String, HandlerArc<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>>,
+    consumer_channel: tokio::sync::mpsc::Sender<(String, InMemoryPayload)>,
+    subscriber_channel: tokio::sync::mpsc::Sender<(String, Box<dyn AnyCloneFactory>)>,
 }
 
 impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
@@ -77,11 +68,12 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
         >,
         mut sub_rx: tokio::sync::mpsc::Receiver<(String, Box<dyn AnyCloneFactory>)>,
         mut cons_rx: tokio::sync::mpsc::Receiver<(String, InMemoryPayload)>,
-    ) -> (JoinHandle<()>, JoinHandle<()>) {
+        mut join_set: JoinSet<()>,
+    ) -> JoinSet<()> {
         // todo use joinsets to execute incoming requests in parallel
         // todo handle conjestions
         let con_state = state.clone();
-        let consumer_join = tokio::spawn(async move {
+        join_set.spawn(async move {
             let mut join_set = JoinSet::<Response<InMemoryResponse>>::new();
 
             loop {
@@ -120,7 +112,7 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
         });
 
         let sub_state = state.clone();
-        let subscriber_join = tokio::spawn(async move {
+        join_set.spawn(async move {
             let mut join_set = JoinSet::<Response<InMemoryResponse>>::new();
 
             loop {
@@ -161,34 +153,37 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
             }
         });
 
-        (consumer_join, subscriber_join)
+        join_set
     }
 
     pub async fn new(
         state: S,
         reg: HandlerRegistry<InMemoryPayload, InMemoryMetadata, S, InMemoryResponse>,
-    ) -> Self {
+    ) -> (Self, JoinSet<()>) {
         let (consumer_tx, consumer_rx) = mpsc::channel::<(String, InMemoryPayload)>(1000);
         let (subscriber_tx, subscriber_rx) =
             mpsc::channel::<(String, Box<dyn AnyCloneFactory>)>(1000);
 
-        let (con_join, sub_join) = DefaultInMemoryPublisherBackend::start_dispatcher(
+        let root_join_set = JoinSet::<()>::new();
+        let root_join_set = DefaultInMemoryPublisherBackend::start_dispatcher(
             state.clone(),
             reg.consumers,
             reg.subscribers,
             subscriber_rx,
             consumer_rx,
+            root_join_set,
         )
         .await;
 
-        DefaultInMemoryPublisherBackend {
-            state: state.clone(),
-            handlers: reg.handlers,
-            consumer_channel: consumer_tx,
-            subscriber_channel: subscriber_tx,
-            sub_join_handle: sub_join,
-            cons_join_handle: con_join,
-        }
+        (
+            DefaultInMemoryPublisherBackend {
+                state: state.clone(),
+                handlers: reg.handlers,
+                consumer_channel: consumer_tx,
+                subscriber_channel: subscriber_tx,
+            },
+            root_join_set,
+        )
     }
 }
 

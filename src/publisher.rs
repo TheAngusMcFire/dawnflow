@@ -1,14 +1,6 @@
-// features:
-// change serializer
-// different backends
-
 use tokio::sync::RwLock;
 
-use crate::{
-    in_memory::{InMemoryMetadata, InMemoryPayload, InMemoryResponse},
-    in_memory_publisher_backend::{DefaultInMemoryPublisherBackend, InMemoryPublisherBackend},
-    registry::HandlerRegistry,
-};
+use crate::in_memory_publisher_backend::InMemoryPublisherBackend;
 
 #[derive(thiserror::Error, Debug)]
 pub enum PublisherError {
@@ -36,7 +28,6 @@ pub struct Publisher {
     backend: PublisherBackend,
 }
 
-// #[async_trait::async_trait]
 impl Publisher {
     #[cfg(not(feature = "in_memory_only"))]
     pub async fn pub_sub<T: serde::Serialize>(&self, msg: T) -> Result<(), PublisherError> {

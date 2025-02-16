@@ -129,6 +129,16 @@ impl<T: Any> FromRequestBody<MyState, InMemoryPayload, InMemoryMetadata, InMemor
 
 #[tokio::main]
 async fn main() {
+    let tr_sub = tracing_subscriber::fmt()
+        .compact()
+        .with_file(true)
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .with_target(false)
+        .finish();
+
+    tracing::subscriber::set_global_default(tr_sub).unwrap();
+
     let handlers =
         HandlerRegistry::<InMemoryPayload, InMemoryMetadata, MyState, InMemoryResponse>::default();
 
@@ -143,33 +153,35 @@ async fn main() {
         publisher: Arc::new(i),
     };
 
-    let backend = DefaultInMemoryPublisherBackend::new(state.clone(), handlers).await;
+    let (backend, join_set) = DefaultInMemoryPublisherBackend::new(state.clone(), handlers).await;
     state.publisher.register_in_memory_backend(backend).await;
 
-    let now = SystemTime::now();
-    let mut js = JoinSet::new();
-    for i in 0..10 {
-        let state = state.clone();
-        js.spawn(async move {
-            for x in 0..1_000_000 {
-                state
-                    .publisher
-                    .pub_sub(Subscribable {
-                        name: "test".into(),
-                        id: x,
-                    })
-                    .await
-                    .unwrap();
-            }
-        });
-    }
-    js.join_all().await;
-    let after = SystemTime::now();
-    let res = after - now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    println!("{res:?}");
+    join_set.join_all().await;
 
-    tokio::time::sleep(Duration::from_secs(100)).await;
+    // let now = SystemTime::now();
+    // let mut js = JoinSet::new();
+    // for i in 0..10 {
+    //     let state = state.clone();
+    //     js.spawn(async move {
+    //         for x in 0..1_000_000 {
+    //             state
+    //                 .publisher
+    //                 .pub_sub(Subscribable {
+    //                     name: "test".into(),
+    //                     id: x,
+    //                 })
+    //                 .await
+    //                 .unwrap();
+    //         }
+    //     });
+    // }
+    // js.join_all().await;
+    // let after = SystemTime::now();
+    // let res = after - now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
+    // tokio::time::sleep(Duration::from_secs(1)).await;
+    // tracing::info!("{res:?}");
+
+    // tokio::time::sleep(Duration::from_secs(100)).await;
 
     println!("this is the in memory example")
 }
