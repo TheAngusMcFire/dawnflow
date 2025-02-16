@@ -131,6 +131,7 @@ impl<T: Any> FromRequestBody<MyState, InMemoryPayload, InMemoryMetadata, InMemor
 async fn main() {
     let tr_sub = tracing_subscriber::fmt()
         .compact()
+        .with_max_level(tracing::Level::DEBUG)
         .with_file(true)
         .with_line_number(true)
         .with_thread_ids(true)
@@ -139,6 +140,7 @@ async fn main() {
 
     tracing::subscriber::set_global_default(tr_sub).unwrap();
 
+    tracing::debug!("start");
     let handlers =
         HandlerRegistry::<InMemoryPayload, InMemoryMetadata, MyState, InMemoryResponse>::default();
 
@@ -148,12 +150,12 @@ async fn main() {
         .register_handler::<Request1, _, _>(request1)
         .register_handler::<Request2, _, _>(request2);
 
-    let i = Publisher::new_in_memory().await;
     let state = MyState {
-        publisher: Arc::new(i),
+        publisher: Arc::new(Publisher::new_in_memory().await),
     };
 
     let (backend, join_set) = DefaultInMemoryPublisherBackend::new(state.clone(), handlers).await;
+
     state.publisher.register_in_memory_backend(backend).await;
 
     join_set.join_all().await;

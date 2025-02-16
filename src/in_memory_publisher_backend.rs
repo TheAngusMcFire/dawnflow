@@ -1,8 +1,9 @@
 use std::{any::Any, collections::HashMap};
 
 use tokio::{
+    select,
     sync::mpsc,
-    task::{JoinHandle, JoinSet},
+    task::{JoinError, JoinHandle, JoinSet},
 };
 
 use crate::{
@@ -56,6 +57,8 @@ pub struct DefaultInMemoryPublisherBackend<S: Clone + Sync + Send + 'static> {
 }
 
 impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
+    pub fn handle_join_result(res: Result<Response<InMemoryResponse>, JoinError>) {}
+
     pub async fn start_dispatcher(
         state: S,
         consumers: HashMap<
@@ -74,22 +77,40 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
         // todo handle conjestions
         let con_state = state.clone();
         join_set.spawn(async move {
+            let guard = elegant_departure::get_shutdown_guard();
             let mut join_set = JoinSet::<Response<InMemoryResponse>>::new();
 
             loop {
-                while let Some(jh) = join_set.try_join_next() {
-                    match jh {
-                        Ok(x) => {
-                            //
-                        }
-                        Err(x) => {
-                            println!("{x}")
+                let (name, payload) = if !join_set.is_empty() {
+                    select! {
+                        Some(r) = cons_rx.recv() => r,
+                        Some(jh) = join_set.join_next() => {
+                            DefaultInMemoryPublisherBackend::<S>::handle_join_result(jh);
+                            continue;
+                        },
+                        _ = guard.wait() => {
+                            while let Some(r) = join_set.join_next().await {
+                                DefaultInMemoryPublisherBackend::<S>::handle_join_result(r);
+                            }
+                            break;
+                        },
+                        else => {
+                            break;
                         }
                     }
-                }
-
-                let Some((name, payload)) = cons_rx.recv().await else {
-                    todo!("implement shutdown handling")
+                } else {
+                    select! {
+                        Some(r) = cons_rx.recv() => r,
+                        _ = guard.wait() => {
+                            while let Some(r) = join_set.join_next().await {
+                                DefaultInMemoryPublisherBackend::<S>::handle_join_result(r);
+                            }
+                            break;
+                        },
+                        else => {
+                            break;
+                        }
+                    }
                 };
 
                 let Some(call) = consumers.get(&name) else {
@@ -113,22 +134,33 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
 
         let sub_state = state.clone();
         join_set.spawn(async move {
+            let guard = elegant_departure::get_shutdown_guard();
             let mut join_set = JoinSet::<Response<InMemoryResponse>>::new();
 
             loop {
-                while let Some(jh) = join_set.try_join_next() {
-                    match jh {
-                        Ok(x) => {
-                            //
+                let (name, payload) = select! {
+                    r = sub_rx.recv() => {
+                        let Some(p) = r else {
+                            tracing::debug!("stop");
+                            break
+                        };
+                        p
+                    },
+                    Some(jh) = join_set.join_next() => {
+                        // let Some(jh) = jh else {
+                        //     tracing::debug!("stop");
+                        //     continue;
+                        // };
+                        DefaultInMemoryPublisherBackend::<S>::handle_join_result(jh);
+                        continue;
+                    },
+                    _ = guard.wait() => {
+                        while let Some(r) = join_set.join_next().await {
+                            DefaultInMemoryPublisherBackend::<S>::handle_join_result(r);
                         }
-                        Err(x) => {
-                            println!("{x}")
-                        }
-                    }
-                }
-
-                let Some((name, payload)) = sub_rx.recv().await else {
-                    todo!("implement shutdown handling")
+                        break;
+                            tracing::debug!("stop");
+                    },
                 };
 
                 let Some(calls) = subscribers.get(&name) else {
