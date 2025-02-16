@@ -1,7 +1,4 @@
-use std::{
-    any::Any,
-    sync::Arc,
-};
+use std::{any::Any, sync::Arc};
 
 use dawnflow::{
     handlers::{FromRequestBody, FromRequestMetadata},
@@ -55,8 +52,8 @@ pub async fn subscriber(state: MyState, Req(_sub): Req<Subscribable>) -> eyre::R
     Ok(())
 }
 
-pub async fn consumer(state: MyState, Req(sub): Req<Consummable>) -> eyre::Result<()> {
-    let resp: Response1 = state
+pub async fn consumer(state: MyState, Req(_sub): Req<Consummable>) -> eyre::Result<()> {
+    let _resp: Response1 = state
         .publisher
         .pub_req(Request1 {
             name: "msg1".into(),
@@ -65,8 +62,8 @@ pub async fn consumer(state: MyState, Req(sub): Req<Consummable>) -> eyre::Resul
     Ok(())
 }
 
-pub async fn request1(state: MyState, Req(sub): Req<Request1>) -> eyre::Result<Response1> {
-    let resp: Response2 = state
+pub async fn request1(state: MyState, Req(_sub): Req<Request1>) -> eyre::Result<Response1> {
+    let _resp: Response2 = state
         .publisher
         .pub_req(Request2 {
             name: "msg1".into(),
@@ -75,7 +72,7 @@ pub async fn request1(state: MyState, Req(sub): Req<Request1>) -> eyre::Result<R
     Ok(Response1 { id: 24 })
 }
 
-pub async fn request2(state: MyState, Req(sub): Req<Request2>) -> eyre::Result<Response2> {
+pub async fn request2(_state: MyState, Req(_sub): Req<Request2>) -> eyre::Result<Response2> {
     Ok(Response2 { id: 124 })
 }
 
