@@ -222,7 +222,7 @@ impl Publisher {
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
-        let name = Self::get_obj_name::<T>();
+        let name = Self::get_obj_name::<TReq>();
         let res = backend
             .read()
             .await
