@@ -1,12 +1,9 @@
 use std::any::Any;
 
-use crate::handlers::{IntoResponse, Response, ResponseErrorScope};
-
-// impl IntoResponsePayload<InMemoryResponse> for () {
-//     fn into_response_payload(self) -> InMemoryResponse {
-//         InMemoryResponse { response: None }
-//     }
-// }
+use crate::{
+    handlers::{FromRequestBody, IntoResponse, Response, ResponseErrorScope},
+    Req,
+};
 
 impl<T: Send + Sync + 'static> IntoResponse<InMemoryResponse> for Result<T, eyre::Report> {
     fn into_response(self) -> Response<InMemoryResponse> {
@@ -30,9 +27,7 @@ impl<T: Send + Sync + 'static> IntoResponse<InMemoryResponse> for Result<T, eyre
     }
 }
 
-pub struct InMemoryMetadata {
-    // pub payload_cloneable: Option<Box<dyn Any + Send + Sync + 'static>>,
-}
+pub struct InMemoryMetadata {}
 
 pub struct InMemoryPayload {
     pub payload: Box<dyn Any + Send + Sync + 'static>,
@@ -40,4 +35,21 @@ pub struct InMemoryPayload {
 
 pub struct InMemoryResponse {
     pub response: Option<Box<dyn Any + Send + Sync + 'static>>,
+}
+
+#[async_trait::async_trait]
+impl<T: Any, S> FromRequestBody<S, InMemoryPayload, InMemoryMetadata, InMemoryResponse> for Req<T> {
+    type Rejection = Result<InMemoryResponse, eyre::Report>;
+    async fn from_request(
+        req: InMemoryPayload,
+        _meta: &mut InMemoryMetadata,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        match req.payload.downcast::<T>() {
+            Ok(x) => Ok(Req(*x)),
+            Err(_) => Err(Err(eyre::eyre!(
+                "Unable to downcast payload to the target type"
+            ))),
+        }
+    }
 }

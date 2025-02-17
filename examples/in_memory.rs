@@ -92,26 +92,6 @@ impl FromRequestMetadata<MyState, InMemoryMetadata, InMemoryResponse> for MyStat
     }
 }
 
-pub struct Req<T>(T);
-#[async_trait::async_trait]
-impl<T: Any> FromRequestBody<MyState, InMemoryPayload, InMemoryMetadata, InMemoryResponse>
-    for Req<T>
-{
-    type Rejection = Result<InMemoryResponse, eyre::Report>;
-    async fn from_request(
-        req: InMemoryPayload,
-        _meta: &mut InMemoryMetadata,
-        _state: &MyState,
-    ) -> Result<Self, Self::Rejection> {
-        match req.payload.downcast::<T>() {
-            Ok(x) => Ok(Req(*x)),
-            Err(_) => Err(Err(eyre::eyre!(
-                "Unable to downcast payload to the target type"
-            ))),
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() {
     let tr_sub = tracing_subscriber::fmt()
