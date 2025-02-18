@@ -20,4 +20,4 @@ impl<R: Send + Sync + 'static> IntoResponse<R> for eyre::Report {
     }
 }
 
-pub struct Req<T>(T);
+pub struct Req<T>(pub T);
