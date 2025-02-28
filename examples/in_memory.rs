@@ -6,10 +6,11 @@ use dawnflow::{
     in_memory_publisher_backend::DefaultInMemoryPublisherBackend,
     publisher::Publisher,
     registry::HandlerRegistry,
+    Req,
 };
 
 #[derive(Debug)]
-pub struct Consummable {
+pub struct Consumable {
     name: String,
     id: usize,
 }
@@ -43,16 +44,17 @@ pub struct Response2 {
 pub async fn subscriber(state: MyState, Req(_sub): Req<Subscribable>) -> eyre::Result<()> {
     state
         .publisher
-        .pub_cons(Consummable {
+        .pub_cons(Consumable {
             name: "some name".into(),
             id: 24,
         })
         .await?;
+    return Err(eyre::eyre!("some error").wrap_err("some error happened"));
 
     Ok(())
 }
 
-pub async fn consumer(state: MyState, Req(_sub): Req<Consummable>) -> eyre::Result<()> {
+pub async fn consumer(state: MyState, Req(_sub): Req<Consumable>) -> eyre::Result<()> {
     let _resp: Response1 = state
         .publisher
         .pub_req(Request1 {
@@ -110,7 +112,7 @@ async fn main() {
 
     let handlers = handlers
         .register_subscriber::<Subscribable, _, _>(subscriber)
-        .register_consumer::<Consummable, _, _>(consumer)
+        .register_consumer::<Consumable, _, _>(consumer)
         .register_handler::<Request1, _, _>(request1)
         .register_handler::<Request2, _, _>(request2);
 
@@ -122,7 +124,7 @@ async fn main() {
 
     state.publisher.register_in_memory_backend(backend).await;
 
-    for x in 0..1_000_000 {
+    for x in 0..1 {
         state
             .publisher
             .pub_sub(Subscribable {

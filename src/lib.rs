@@ -16,6 +16,7 @@ impl<R: Send + Sync + 'static> IntoResponse<R> for eyre::Report {
             success: false,
             report: Some(self),
             payload: None,
+            handler_name: None,
         }
     }
 }

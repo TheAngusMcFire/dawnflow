@@ -16,6 +16,7 @@ pub struct Response<P> {
     pub success: bool,
     pub report: Option<eyre::Report>,
     pub payload: Option<P>,
+    pub handler_name: Option<&'static str>,
 }
 
 pub trait Handler<T, S, P, M, R>: Clone + Send + Sized + 'static {
@@ -117,7 +118,14 @@ macro_rules! impl_handler {
 
                     let res = self($($ty,)* $last,).await;
 
-                   res.into_response()
+                   let mut response = res.into_response();
+
+                   if response.handler_name.is_none() {
+                      let handler_name = std::any::type_name::<F>();
+                      response.handler_name = Some(handler_name);
+                   }
+
+                   response
                 })
             }
         }

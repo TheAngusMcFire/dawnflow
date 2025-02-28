@@ -15,6 +15,7 @@ impl<T: Send + Sync + 'static> IntoResponse<InMemoryResponse> for Result<T, eyre
                 payload: Some(InMemoryResponse {
                     response: Some(Box::new(p)),
                 }),
+                handler_name: None,
             },
             Err(x) => Response {
                 // todo I really hope this extension is only used in execution scopes...
@@ -22,6 +23,7 @@ impl<T: Send + Sync + 'static> IntoResponse<InMemoryResponse> for Result<T, eyre
                 success: false,
                 report: Some(x),
                 payload: None,
+                handler_name: None,
             },
         }
     }

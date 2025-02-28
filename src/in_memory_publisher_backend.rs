@@ -57,7 +57,11 @@ pub struct DefaultInMemoryPublisherBackend<S: Clone + Sync + Send + 'static> {
 }
 
 impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
-    pub fn handle_join_result(res: Result<Response<InMemoryResponse>, JoinError>) {
+    pub fn handle_join_result(
+        res: Result<Response<InMemoryResponse>, JoinError>,
+        // handler_name: &str,
+        // message_name: &str,
+    ) {
         // TODO do something with the error result e.g. publish to a error handler
         match res {
             Ok(Response {
@@ -65,14 +69,17 @@ impl<S: Clone + Sync + Send + 'static> DefaultInMemoryPublisherBackend<S> {
                 success: false,
                 report: Some(report),
                 payload: None,
+                handler_name,
             }) => {
-                tracing::error!("Error during handling of request: {report}");
+                let handler_name = handler_name.unwrap_or("no-handler-name");
+                tracing::error!("Error in handler: {handler_name}\nMessage:\n    {report:?}");
             }
             Ok(Response {
                 error_scope: _,
                 success: true,
                 report: _,
                 payload: _,
+                handler_name: _,
             }) => {
                 tracing::debug!("Request handled successfully");
             }
