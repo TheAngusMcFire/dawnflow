@@ -49,8 +49,6 @@ pub async fn subscriber(state: MyState, Req(_sub): Req<Subscribable>) -> eyre::R
             id: 24,
         })
         .await?;
-    return Err(eyre::eyre!("some error").wrap_err("some error happened"));
-
     Ok(())
 }
 

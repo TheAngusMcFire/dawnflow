@@ -21,7 +21,7 @@ pub struct NatsDipatcher<S: Clone + Sync + Send + 'static> {
 impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
     pub async fn new(
         state: S,
-        reg: HandlerRegistry<NatsPayload, NatsMetadata, S, NatsResponse>,
+        _reg: HandlerRegistry<NatsPayload, NatsMetadata, S, NatsResponse>,
         nats_url: &str,
     ) -> eyre::Result<Self> {
         let client = match async_nats::connect(nats_url).await {
@@ -35,9 +35,11 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
         })
     }
 
-    pub fn handle_join_result(res: Result<Response<NatsResponse>, JoinError>) {
+    pub fn handle_join_result(
+        res: Result<Response<NatsResponse>, JoinError>,
+    ) -> Result<Response<NatsResponse>, JoinError> {
         // TODO do something with the error result e.g. publish to a error handler
-        match res {
+        match &res {
             Ok(Response {
                 error_scope: _,
                 success: false,
@@ -67,6 +69,8 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
                 tracing::error!("Unexpected Error during processing of request")
             }
         };
+
+        res
     }
 
     pub async fn start_dispatcher(
@@ -83,7 +87,7 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
                 let mut join_set = JoinSet::<Response<NatsResponse>>::new();
                 loop {
                     while let Some(x) = join_set.try_join_next() {
-                        Self::handle_join_result(x);
+                        let _ = Self::handle_join_result(x);
                     }
 
                     let next = match sub.next().await {
@@ -122,7 +126,7 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
                 let mut join_set = JoinSet::<Response<NatsResponse>>::new();
                 loop {
                     while let Some(x) = join_set.try_join_next() {
-                        Self::handle_join_result(x);
+                        let _ = Self::handle_join_result(x);
                     }
 
                     let next = match sub.next().await {
@@ -158,11 +162,30 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
         for (name, handler) in handers {
             let mut sub = self.client.subscribe(format!("request.{}", name)).await?;
             let state = self.state.clone();
+            let client = self.client.clone();
             join_set.spawn(async move {
                 let mut join_set = JoinSet::<Response<NatsResponse>>::new();
                 loop {
                     while let Some(x) = join_set.try_join_next() {
-                        Self::handle_join_result(x);
+                        let res = match Self::handle_join_result(x) {
+                            Ok(Response {
+                                payload:
+                                    Some(NatsResponse {
+                                        response,
+                                        subject: Some(sub),
+                                    }),
+                                ..
+                            }) => client.publish(sub.as_ref().clone(), response.into()).await,
+                            _ => {
+                                continue;
+                            }
+                        };
+                        match &res {
+                            Err(x) => {
+                                tracing::error!("while publishing nats response: {x:?}");
+                            }
+                            _ => continue,
+                        }
                     }
 
                     let next = match sub.next().await {

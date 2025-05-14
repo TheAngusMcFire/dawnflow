@@ -8,7 +8,7 @@ use crate::{
 impl<T: Send + Sync + 'static> IntoResponse<InMemoryMetadata, InMemoryResponse>
     for Result<T, eyre::Report>
 {
-    fn into_response(self, metadata: &InMemoryMetadata) -> Response<InMemoryResponse> {
+    fn into_response(self, _metadata: &InMemoryMetadata) -> Response<InMemoryResponse> {
         match self {
             Ok(p) => Response {
                 error_scope: None,
