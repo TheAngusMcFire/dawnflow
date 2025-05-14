@@ -12,8 +12,8 @@ pub mod nats;
 #[cfg(all(feature = "in_memory", feature = "nats"))]
 compile_error!("features `feature/in_memory` and `feature/nats` are mutually exclusive");
 
-impl<R: Send + Sync + 'static> IntoResponse<R> for eyre::Report {
-    fn into_response(self) -> Response<R> {
+impl<R: Send + Sync + 'static, M> IntoResponse<M, R> for eyre::Report {
+    fn into_response(self, metadata: &M) -> Response<R> {
         Response {
             error_scope: Some(ResponseErrorScope::Preparation),
             success: false,

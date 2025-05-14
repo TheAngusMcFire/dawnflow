@@ -95,6 +95,9 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
 
                     let payload = NatsPayload {
                         payload: Arc::new(next.payload.into()),
+                    };
+
+                    let metadata = NatsMetadata {
                         subject: Arc::new(next.subject),
                     };
 
@@ -103,13 +106,7 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
 
                     join_set.spawn(async move {
                         handler
-                            .call(
-                                crate::handlers::HandlerRequest {
-                                    metadata: NatsMetadata {},
-                                    payload,
-                                },
-                                state,
-                            )
+                            .call(crate::handlers::HandlerRequest { metadata, payload }, state)
                             .await
                     });
                 }
@@ -137,6 +134,9 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
 
                     let payload = NatsPayload {
                         payload: Arc::new(next.payload.into()),
+                    };
+
+                    let metadata = NatsMetadata {
                         subject: Arc::new(next.subject),
                     };
 
@@ -144,15 +144,10 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
                         let state = state.clone();
                         let handler = handler.clone();
                         let payload = payload.clone();
+                        let metadata = metadata.clone();
                         join_set.spawn(async move {
                             handler
-                                .call(
-                                    crate::handlers::HandlerRequest {
-                                        metadata: NatsMetadata {},
-                                        payload,
-                                    },
-                                    state,
-                                )
+                                .call(crate::handlers::HandlerRequest { metadata, payload }, state)
                                 .await
                         });
                     }
@@ -179,6 +174,9 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
 
                     let payload = NatsPayload {
                         payload: Arc::new(next.payload.into()),
+                    };
+
+                    let metadata = NatsMetadata {
                         subject: Arc::new(next.subject),
                     };
 
@@ -187,13 +185,7 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
 
                     join_set.spawn(async move {
                         handler
-                            .call(
-                                crate::handlers::HandlerRequest {
-                                    metadata: NatsMetadata {},
-                                    payload,
-                                },
-                                state,
-                            )
+                            .call(crate::handlers::HandlerRequest { metadata, payload }, state)
                             .await
                     });
                 }

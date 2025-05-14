@@ -37,19 +37,19 @@ mod private {
 
 #[async_trait::async_trait]
 pub trait FromRequestMetadata<S, M, R>: Sized {
-    type Rejection: IntoResponse<R>;
+    type Rejection: IntoResponse<M, R>;
     async fn from_request_metadata(metadata: &mut M, state: &S) -> Result<Self, Self::Rejection>;
 }
 
 // from request consumes the request, so it is used to get the payload out of the body
 #[async_trait::async_trait]
 pub trait FromRequestBody<S, P, M, R, A = private::ViaRequest>: Sized {
-    type Rejection: IntoResponse<R>;
+    type Rejection: IntoResponse<M, R>;
     async fn from_request(req: P, meta: &mut M, state: &S) -> Result<Self, Self::Rejection>;
 }
 
-pub trait IntoResponse<P> {
-    fn into_response(self) -> Response<P>;
+pub trait IntoResponse<M, P> {
+    fn into_response(self, metadata: &M) -> Response<P>;
 }
 
 impl<P, M> HandlerRequest<P, M> {
@@ -68,15 +68,15 @@ impl<F, Fut, Res, S, P, M, R> Handler<((),), S, P, M, R> for F
 where
     F: FnOnce() -> Fut + Clone + Send + 'static,
     Fut: Future<Output = Res> + Send,
-    Res: IntoResponse<R>,
+    Res: IntoResponse<M, R>,
     P: Send + 'static,
     M: Send + 'static,
     R: Send + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response<R>> + Send>>;
 
-    fn call(self, _req: HandlerRequest<P, M>, _state: S) -> Self::Future {
-        Box::pin(async move { self().await.into_response() })
+    fn call(self, req: HandlerRequest<P, M>, _state: S) -> Self::Future {
+        Box::pin(async move { self().await.into_response(&req.metadata) })
     }
 }
 
@@ -93,7 +93,7 @@ macro_rules! impl_handler {
             M: Send + 'static,
             R: Send + 'static,
             S: Send + Sync + 'static,
-            Res: IntoResponse<R>,
+            Res: IntoResponse<M, R>,
             $( $ty: FromRequestMetadata<S, M, R> + Send, )*
             $last: FromRequestBody<S, P, M, R, A> + Send,
         {
@@ -107,18 +107,18 @@ macro_rules! impl_handler {
                     $(
                         let $ty = match $ty::from_request_metadata(&mut metadata, state).await {
                             Ok(value) => value,
-                            Err(rejection) => return rejection.into_response(),
+                            Err(rejection) => return rejection.into_response(&metadata),
                         };
                     )*
 
                     let $last = match $last::from_request(body, &mut metadata, state).await {
                         Ok(value) => value,
-                        Err(rejection) => return rejection.into_response(),
+                        Err(rejection) => return rejection.into_response(&metadata),
                     };
 
                     let res = self($($ty,)* $last,).await;
 
-                   let mut response = res.into_response();
+                   let mut response = res.into_response(&metadata);
 
                    if response.handler_name.is_none() {
                       let handler_name = std::any::type_name::<F>();

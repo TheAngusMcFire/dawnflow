@@ -11,8 +11,10 @@ use crate::{
     Req,
 };
 
-impl<T: Serialize + Send + Sync + 'static> IntoResponse<NatsResponse> for Result<T, eyre::Report> {
-    fn into_response(self) -> Response<NatsResponse> {
+impl<T: Serialize + Send + Sync + 'static> IntoResponse<NatsMetadata, NatsResponse>
+    for Result<T, eyre::Report>
+{
+    fn into_response(self, metadata: &NatsMetadata) -> Response<NatsResponse> {
         match self {
             Ok(p) => Response {
                 error_scope: None,
@@ -20,7 +22,7 @@ impl<T: Serialize + Send + Sync + 'static> IntoResponse<NatsResponse> for Result
                 report: None,
                 payload: Some(NatsResponse {
                     response: rmp_serde::to_vec(&p).unwrap(),
-                    subject: None,
+                    subject: Some(metadata.subject.clone()),
                 }),
                 handler_name: None,
             },
@@ -49,12 +51,14 @@ impl<T: Serialize + Send + Sync + 'static> IntoResponse<NatsResponse> for Result
 //     }
 // }
 
-pub struct NatsMetadata {}
+#[derive(Clone)]
+pub struct NatsMetadata {
+    pub subject: Arc<Subject>,
+}
 
 #[derive(Clone)]
 pub struct NatsPayload {
     pub payload: Arc<Vec<u8>>,
-    pub subject: Arc<Subject>,
 }
 
 pub struct NatsResponse {
