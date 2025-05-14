@@ -2,10 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_nats::Client;
 use eyre::bail;
-use tokio::{
-    select,
-    task::{JoinError, JoinSet},
-};
+use tokio::task::{JoinError, JoinSet};
 
 use crate::{
     handlers::Response,
@@ -79,7 +76,7 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
         consumers: HashMap<String, HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>,
         subscribers: HashMap<String, Vec<HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>>,
         handers: HashMap<String, Vec<HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>>,
-        mut join_set: JoinSet<()>,
+        join_set: JoinSet<()>,
     ) -> JoinSet<()> {
         todo!()
     }
