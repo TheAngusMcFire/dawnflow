@@ -1,6 +1,8 @@
 pub mod dispatcher;
 pub mod publisher_backend;
 
+use std::sync::Arc;
+
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
@@ -47,8 +49,9 @@ impl<T: Serialize + Send + Sync + 'static> IntoResponse<NatsResponse> for Result
 
 pub struct NatsMetadata {}
 
+#[derive(Clone)]
 pub struct NatsPayload {
-    pub payload: Vec<u8>,
+    pub payload: Arc<Vec<u8>>,
 }
 
 pub struct NatsResponse {

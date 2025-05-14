@@ -35,11 +35,7 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
         })
     }
 
-    pub fn handle_join_result(
-        res: Result<Response<NatsResponse>, JoinError>,
-        // handler_name: &str,
-        // message_name: &str,
-    ) {
+    pub fn handle_join_result(res: Result<Response<NatsResponse>, JoinError>) {
         // TODO do something with the error result e.g. publish to a error handler
         match res {
             Ok(Response {
@@ -84,21 +80,80 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
             let mut sub = self.client.subscribe(format!("consumer.{}", name)).await?;
             let state = self.state.clone();
             join_set.spawn(async move {
+                let mut join_set = JoinSet::<Response<NatsResponse>>::new();
                 loop {
-                    let state = state.clone();
-                    let next = sub.next().await.unwrap();
-                    let payload = NatsPayload {
-                        payload: next.payload.into(),
+                    while let Some(x) = join_set.try_join_next() {
+                        Self::handle_join_result(x);
+                    }
+
+                    let next = match sub.next().await {
+                        Some(x) => x,
+                        None => {
+                            todo!("this is probably a shutdown?");
+                        }
                     };
-                    let resp = handler
-                        .call(
-                            crate::handlers::HandlerRequest {
-                                metadata: NatsMetadata {},
-                                payload,
-                            },
-                            state,
-                        )
-                        .await;
+
+                    let payload = NatsPayload {
+                        payload: Arc::new(next.payload.into()),
+                    };
+
+                    let state = state.clone();
+                    let handler = handler.clone();
+
+                    join_set.spawn(async move {
+                        handler
+                            .call(
+                                crate::handlers::HandlerRequest {
+                                    metadata: NatsMetadata {},
+                                    payload,
+                                },
+                                state,
+                            )
+                            .await
+                    });
+                }
+            });
+        }
+        for (name, handler) in subscribers {
+            let mut sub = self
+                .client
+                .subscribe(format!("subscriber.{}", name))
+                .await?;
+            let state = self.state.clone();
+            join_set.spawn(async move {
+                let mut join_set = JoinSet::<Response<NatsResponse>>::new();
+                loop {
+                    while let Some(x) = join_set.try_join_next() {
+                        Self::handle_join_result(x);
+                    }
+
+                    let next = match sub.next().await {
+                        Some(x) => x,
+                        None => {
+                            todo!("this is probably a shutdown?");
+                        }
+                    };
+
+                    let payload = NatsPayload {
+                        payload: Arc::new(next.payload.into()),
+                    };
+
+                    for handler in &handler {
+                        let state = state.clone();
+                        let handler = handler.clone();
+                        let payload = payload.clone();
+                        join_set.spawn(async move {
+                            handler
+                                .call(
+                                    crate::handlers::HandlerRequest {
+                                        metadata: NatsMetadata {},
+                                        payload,
+                                    },
+                                    state,
+                                )
+                                .await
+                        });
+                    }
                 }
             });
         }
