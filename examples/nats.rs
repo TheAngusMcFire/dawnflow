@@ -8,6 +8,7 @@ use dawnflow::{
     Req,
 };
 use serde::{Deserialize, Serialize};
+use tokio::task::JoinSet;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Consumable {
@@ -123,7 +124,10 @@ async fn main() -> eyre::Result<()> {
         ),
     };
 
-    let dispatcher = NatsDipatcher::new(state.clone(), handlers, &connection_string).await?;
+    let dispatcher = NatsDipatcher::new(state.clone(), &connection_string).await?;
+    let _join_set = dispatcher
+        .start_dispatcher(handlers, JoinSet::new())
+        .await?;
 
     for x in 0..1 {
         state

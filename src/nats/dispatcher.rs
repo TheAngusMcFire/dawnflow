@@ -1,13 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use async_nats::Client;
 use eyre::bail;
 use tokio::task::{JoinError, JoinSet};
 
-use crate::{
-    handlers::Response,
-    registry::{HandlerArc, HandlerRegistry},
-};
+use crate::{handlers::Response, registry::HandlerRegistry};
 
 use futures::stream::StreamExt;
 
@@ -19,11 +16,7 @@ pub struct NatsDipatcher<S: Clone + Sync + Send + 'static> {
 }
 
 impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
-    pub async fn new(
-        state: S,
-        _reg: HandlerRegistry<NatsPayload, NatsMetadata, S, NatsResponse>,
-        nats_url: &str,
-    ) -> eyre::Result<Self> {
+    pub async fn new(state: S, nats_url: &str) -> eyre::Result<Self> {
         let client = match async_nats::connect(nats_url).await {
             Ok(x) => x,
             Err(err) => bail!("{}", err),
@@ -73,14 +66,13 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
         res
     }
 
+    // todo implement include guard checks, for clean shutdown
     pub async fn start_dispatcher(
         self,
-        consumers: HashMap<String, HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>,
-        subscribers: HashMap<String, Vec<HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>>,
-        handers: HashMap<String, HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>,
+        reg: HandlerRegistry<NatsPayload, NatsMetadata, S, NatsResponse>,
         mut join_set: JoinSet<()>,
     ) -> eyre::Result<JoinSet<()>> {
-        for (name, handler) in consumers {
+        for (name, handler) in reg.consumers {
             let mut sub = self.client.subscribe(format!("consumer.{}", name)).await?;
             let state = self.state.clone();
             join_set.spawn(async move {
@@ -116,7 +108,7 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
                 }
             });
         }
-        for (name, handler) in subscribers {
+        for (name, handler) in reg.subscribers {
             let mut sub = self
                 .client
                 .subscribe(format!("subscriber.{}", name))
@@ -159,7 +151,7 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
             });
         }
 
-        for (name, handler) in handers {
+        for (name, handler) in reg.handlers {
             let mut sub = self.client.subscribe(format!("request.{}", name)).await?;
             let state = self.state.clone();
             let client = self.client.clone();
