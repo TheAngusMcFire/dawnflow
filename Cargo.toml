@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = []
+default = ["nats"]
 in_memory = []
 in_memory_only = ["in_memory"]
-nats=[]
+nats=[ "dep:async-nats" ]
 
 [dependencies]
 async-trait = "0.1"
@@ -20,6 +20,7 @@ thiserror = "2"
 tokio = { version = "1.43.0", features = ["full"] }
 tracing = "0.1"
 
+async-nats = { version = "0.40", optional = true }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3" }
@@ -28,3 +29,9 @@ tracing-subscriber = { version = "0.3" }
 name = "in_memory"
 path = "examples/in_memory.rs"
 required-features = ["in_memory_only"]
+
+[[example]]
+name = "nats"
+path = "examples/nats.rs"
+# todo change this
+required-features = []

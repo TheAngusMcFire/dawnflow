@@ -6,6 +6,9 @@ pub mod in_memory_publisher_backend;
 pub mod publisher;
 pub mod registry;
 
+#[cfg(feature = "nats")]
+pub mod nats;
+
 #[cfg(all(feature = "in_memory", feature = "nats"))]
 compile_error!("features `feature/in_memory` and `feature/nats` are mutually exclusive");
 

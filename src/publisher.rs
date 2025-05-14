@@ -1,6 +1,9 @@
 use tokio::sync::RwLock;
 
-use crate::in_memory_publisher_backend::InMemoryPublisherBackend;
+use crate::{
+    in_memory_publisher_backend::InMemoryPublisherBackend,
+    nats::publisher_backend::NatsPublisherBackend,
+};
 
 #[derive(thiserror::Error, Debug)]
 pub enum PublisherError {
@@ -12,6 +15,10 @@ pub enum PublisherError {
     Eyre(eyre::Report),
     #[error("serialize error: {0}")]
     Serde(String),
+    #[error("nats publish error: {0}")]
+    NatsPublishingError(#[from] async_nats::PublishError),
+    #[error("nats request error: {0}")]
+    NatsRequestError(#[from] async_nats::RequestError),
 }
 
 #[async_trait::async_trait]
@@ -255,5 +262,15 @@ impl Publisher {
 
         let mut lock = backend.write().await;
         *lock = Some(Box::new(new_backend));
+    }
+
+    #[cfg(feature = "nats")]
+    pub async fn new_nats_publisher(nats_url: &str) -> Result<Self, async_nats::Error> {
+        Ok(Self {
+            backend: PublisherBackend::ByteBackend {
+                backend: Box::new(NatsPublisherBackend::new(nats_url).await?),
+            },
+            serializer: PublisherSerializer::Binary,
+        })
     }
 }
