@@ -9,6 +9,8 @@ use crate::{
     registry::{HandlerArc, HandlerRegistry},
 };
 
+use futures::stream::StreamExt;
+
 use super::{NatsMetadata, NatsPayload, NatsResponse};
 
 pub struct NatsDipatcher<S: Clone + Sync + Send + 'static> {
@@ -72,12 +74,34 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
     }
 
     pub async fn start_dispatcher(
-        state: S,
+        self,
         consumers: HashMap<String, HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>,
         subscribers: HashMap<String, Vec<HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>>,
         handers: HashMap<String, Vec<HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>>,
-        join_set: JoinSet<()>,
-    ) -> JoinSet<()> {
+        mut join_set: JoinSet<()>,
+    ) -> eyre::Result<JoinSet<()>> {
+        for (name, handler) in consumers {
+            let mut sub = self.client.subscribe(format!("consumer.{}", name)).await?;
+            let state = self.state.clone();
+            join_set.spawn(async move {
+                loop {
+                    let state = state.clone();
+                    let next = sub.next().await.unwrap();
+                    let payload = NatsPayload {
+                        payload: next.payload.into(),
+                    };
+                    let resp = handler
+                        .call(
+                            crate::handlers::HandlerRequest {
+                                metadata: NatsMetadata {},
+                                payload,
+                            },
+                            state,
+                        )
+                        .await;
+                }
+            });
+        }
         todo!()
     }
 }
