@@ -3,6 +3,7 @@ pub mod publisher_backend;
 
 use std::sync::Arc;
 
+use async_nats::Subject;
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
@@ -19,6 +20,7 @@ impl<T: Serialize + Send + Sync + 'static> IntoResponse<NatsResponse> for Result
                 report: None,
                 payload: Some(NatsResponse {
                     response: rmp_serde::to_vec(&p).unwrap(),
+                    subject: None,
                 }),
                 handler_name: None,
             },
@@ -52,11 +54,14 @@ pub struct NatsMetadata {}
 #[derive(Clone)]
 pub struct NatsPayload {
     pub payload: Arc<Vec<u8>>,
+    pub subject: Arc<Subject>,
 }
 
 pub struct NatsResponse {
     // todo maybe we wanne give that something to detect errors
     pub response: Vec<u8>,
+    /// if we do not have a subject, we have no one to return the data to
+    pub subject: Option<Arc<Subject>>,
 }
 
 #[async_trait::async_trait]

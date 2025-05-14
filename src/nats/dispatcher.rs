@@ -73,7 +73,7 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
         self,
         consumers: HashMap<String, HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>,
         subscribers: HashMap<String, Vec<HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>>,
-        handers: HashMap<String, Vec<HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>>,
+        handers: HashMap<String, HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>>,
         mut join_set: JoinSet<()>,
     ) -> eyre::Result<JoinSet<()>> {
         for (name, handler) in consumers {
@@ -95,6 +95,7 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
 
                     let payload = NatsPayload {
                         payload: Arc::new(next.payload.into()),
+                        subject: Arc::new(next.subject),
                     };
 
                     let state = state.clone();
@@ -136,6 +137,7 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
 
                     let payload = NatsPayload {
                         payload: Arc::new(next.payload.into()),
+                        subject: Arc::new(next.subject),
                     };
 
                     for handler in &handler {
@@ -154,6 +156,46 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
                                 .await
                         });
                     }
+                }
+            });
+        }
+
+        for (name, handler) in handers {
+            let mut sub = self.client.subscribe(format!("request.{}", name)).await?;
+            let state = self.state.clone();
+            join_set.spawn(async move {
+                let mut join_set = JoinSet::<Response<NatsResponse>>::new();
+                loop {
+                    while let Some(x) = join_set.try_join_next() {
+                        Self::handle_join_result(x);
+                    }
+
+                    let next = match sub.next().await {
+                        Some(x) => x,
+                        None => {
+                            todo!("this is probably a shutdown?");
+                        }
+                    };
+
+                    let payload = NatsPayload {
+                        payload: Arc::new(next.payload.into()),
+                        subject: Arc::new(next.subject),
+                    };
+
+                    let state = state.clone();
+                    let handler = handler.clone();
+
+                    join_set.spawn(async move {
+                        handler
+                            .call(
+                                crate::handlers::HandlerRequest {
+                                    metadata: NatsMetadata {},
+                                    payload,
+                                },
+                                state,
+                            )
+                            .await
+                    });
                 }
             });
         }
