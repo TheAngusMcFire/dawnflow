@@ -17,6 +17,7 @@ pub struct NatsDipatcher<S: Clone + Sync + Send + 'static> {
 
 impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
     pub async fn new(state: S, nats_url: &str) -> eyre::Result<Self> {
+        todo!("move this to the start dispatcher funciton");
         let client = match async_nats::connect(nats_url).await {
             Ok(x) => x,
             Err(err) => bail!("{}", err),
