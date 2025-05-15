@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
-use async_nats::Client;
+use async_nats::Message;
 use eyre::bail;
-use tokio::task::{JoinError, JoinSet};
+use tokio::{
+    select,
+    task::{JoinError, JoinSet},
+};
 
 use crate::{handlers::Response, registry::HandlerRegistry};
 
@@ -10,25 +13,14 @@ use futures::stream::StreamExt;
 
 use super::{NatsMetadata, NatsPayload, NatsResponse};
 
-pub struct NatsDipatcher<S: Clone + Sync + Send + 'static> {
-    state: S,
-    client: Arc<Client>,
+pub struct NatsDipatcher {}
+
+pub enum MessageOrResponse {
+    Message(Message),
+    Response(Result<Response<NatsResponse>, JoinError>),
 }
 
-impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
-    pub async fn new(state: S, nats_url: &str) -> eyre::Result<Self> {
-        todo!("move this to the start dispatcher funciton");
-        let client = match async_nats::connect(nats_url).await {
-            Ok(x) => x,
-            Err(err) => bail!("{}", err),
-        };
-
-        Ok(Self {
-            state,
-            client: Arc::new(client),
-        })
-    }
-
+impl NatsDipatcher {
     pub fn handle_join_result(
         res: Result<Response<NatsResponse>, JoinError>,
     ) -> Result<Response<NatsResponse>, JoinError> {
@@ -68,25 +60,56 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
     }
 
     // todo implement include guard checks, for clean shutdown
-    pub async fn start_dispatcher(
-        self,
+    pub async fn start_dispatcher<S: Clone + Sync + Send + 'static>(
+        nats_url: &str,
+        state: S,
         reg: HandlerRegistry<NatsPayload, NatsMetadata, S, NatsResponse>,
         mut join_set: JoinSet<()>,
     ) -> eyre::Result<JoinSet<()>> {
+        let client = Arc::new(match async_nats::connect(nats_url).await {
+            Ok(x) => x,
+            Err(err) => bail!("{}", err),
+        });
+
         for (name, handler) in reg.consumers {
-            let mut sub = self.client.subscribe(format!("consumer.{}", name)).await?;
-            let state = self.state.clone();
+            let mut sub = client.subscribe(format!("consumer.{}", name)).await?;
+            let state = state.clone();
             join_set.spawn(async move {
+                let guard = elegant_departure::get_shutdown_guard();
                 let mut join_set = JoinSet::<Response<NatsResponse>>::new();
                 loop {
                     while let Some(x) = join_set.try_join_next() {
                         let _ = Self::handle_join_result(x);
                     }
-
-                    let next = match sub.next().await {
-                        Some(x) => x,
-                        None => {
-                            todo!("this is probably a shutdown?");
+                    let next = if !join_set.is_empty() {
+                        select! {
+                            Some(r) = sub.next() => r,
+                            jh = join_set.join_next() => {
+                                let _ = Self::handle_join_result(jh.expect("can not happen here"));
+                                continue;
+                            },
+                            _ = guard.wait() => {
+                                while let Some(r) = join_set.join_next().await {
+                                    let _ = Self::handle_join_result(r);
+                                }
+                                break;
+                            },
+                            else => {
+                                break;
+                            }
+                        }
+                    } else {
+                        select! {
+                            Some(r) = sub.next() => r,
+                            _ = guard.wait() => {
+                                while let Some(r) = join_set.join_next().await {
+                                    let _ = Self::handle_join_result(r);
+                                }
+                                break;
+                            },
+                            else => {
+                                break;
+                            }
                         }
                     };
 
@@ -110,22 +133,45 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
             });
         }
         for (name, handler) in reg.subscribers {
-            let mut sub = self
-                .client
-                .subscribe(format!("subscriber.{}", name))
-                .await?;
-            let state = self.state.clone();
+            let mut sub = client.subscribe(format!("subscriber.{}", name)).await?;
+            let state = state.clone();
             join_set.spawn(async move {
+                let guard = elegant_departure::get_shutdown_guard();
                 let mut join_set = JoinSet::<Response<NatsResponse>>::new();
                 loop {
                     while let Some(x) = join_set.try_join_next() {
                         let _ = Self::handle_join_result(x);
                     }
 
-                    let next = match sub.next().await {
-                        Some(x) => x,
-                        None => {
-                            todo!("this is probably a shutdown?");
+                    let next = if !join_set.is_empty() {
+                        select! {
+                            Some(r) = sub.next() => r,
+                            jh = join_set.join_next() => {
+                                let _ = Self::handle_join_result(jh.expect("can not happen here"));
+                                continue;
+                            },
+                            _ = guard.wait() => {
+                                while let Some(r) = join_set.join_next().await {
+                                    let _ = Self::handle_join_result(r);
+                                }
+                                break;
+                            },
+                            else => {
+                                break;
+                            }
+                        }
+                    } else {
+                        select! {
+                            Some(r) = sub.next() => r,
+                            _ = guard.wait() => {
+                                while let Some(r) = join_set.join_next().await {
+                                    let _ = Self::handle_join_result(r);
+                                }
+                                break;
+                            },
+                            else => {
+                                break;
+                            }
                         }
                     };
 
@@ -153,13 +199,15 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
         }
 
         for (name, handler) in reg.handlers {
-            let mut sub = self.client.subscribe(format!("request.{}", name)).await?;
-            let state = self.state.clone();
-            let client = self.client.clone();
+            let mut sub = client.subscribe(format!("request.{}", name)).await?;
+            let state = state.clone();
+            let client = client.clone();
             join_set.spawn(async move {
+                let guard = elegant_departure::get_shutdown_guard();
+                let mut shutdown = false;
                 let mut join_set = JoinSet::<Response<NatsResponse>>::new();
                 loop {
-                    while let Some(x) = join_set.try_join_next() {
+                    while let Some(x) = if shutdown {join_set.join_next().await} else {join_set.try_join_next() }{
                         let res = match Self::handle_join_result(x) {
                             Ok(Response {
                                 payload:
@@ -181,29 +229,79 @@ impl<S: Clone + Sync + Send + 'static> NatsDipatcher<S> {
                         }
                     }
 
-                    let next = match sub.next().await {
-                        Some(x) => x,
-                        None => {
-                            todo!("this is probably a shutdown?");
+                    if shutdown {
+                        break;
+                    }
+
+                    let next = if !join_set.is_empty() {
+                        select! {
+                            Some(r) = sub.next() => MessageOrResponse::Message(r),
+                            jh = join_set.join_next() => {
+                                MessageOrResponse::Response(Self::handle_join_result(jh.expect("can not happen here")))
+                            },
+                            _ = guard.wait() => {
+                                shutdown = true;
+                                continue;
+                            },
+                            else => {
+                                break;
+                            }
+                        }
+                    } else {
+                        select! {
+                            Some(r) = sub.next() => MessageOrResponse::Message(r),
+                            _ = guard.wait() => {
+                                shutdown = true;
+                                continue;
+                            },
+                            else => {
+                                break;
+                            }
                         }
                     };
 
-                    let payload = NatsPayload {
-                        payload: Arc::new(next.payload.into()),
-                    };
+                    match next {
+                        MessageOrResponse::Message(next) => {
+                            let payload = NatsPayload {
+                                payload: Arc::new(next.payload.into()),
+                            };
 
-                    let metadata = NatsMetadata {
-                        subject: Arc::new(next.subject),
-                    };
+                            let metadata = NatsMetadata {
+                                subject: Arc::new(next.subject),
+                            };
 
-                    let state = state.clone();
-                    let handler = handler.clone();
+                            let state = state.clone();
+                            let handler = handler.clone();
 
-                    join_set.spawn(async move {
-                        handler
-                            .call(crate::handlers::HandlerRequest { metadata, payload }, state)
-                            .await
-                    });
+                            join_set.spawn(async move {
+                                handler
+                                    .call(crate::handlers::HandlerRequest { metadata, payload }, state)
+                                    .await
+                            });
+                        }
+                        MessageOrResponse::Response(response) => {
+                            let res = match response {
+                                Ok(Response {
+                                    payload:
+                                        Some(NatsResponse {
+                                            response,
+                                            subject: Some(sub),
+                                        }),
+                                    ..
+                                }) => client.publish(sub.as_ref().clone(), response.into()).await,
+                                _ => {
+                                    continue;
+                                }
+                            };
+                            match &res {
+                                Err(x) => {
+                                    tracing::error!("while publishing nats response: {x:?}");
+                                }
+                                _ => continue,
+                            }
+                        },
+                    }
+
                 }
             });
         }

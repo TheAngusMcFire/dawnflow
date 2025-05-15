@@ -124,10 +124,13 @@ async fn main() -> eyre::Result<()> {
         ),
     };
 
-    let dispatcher = NatsDipatcher::new(state.clone(), &connection_string).await?;
-    let _join_set = dispatcher
-        .start_dispatcher(handlers, JoinSet::new())
-        .await?;
+    let _join_set = NatsDipatcher::start_dispatcher(
+        &connection_string,
+        state.clone(),
+        handlers,
+        JoinSet::new(),
+    )
+    .await?;
 
     for x in 0..1 {
         state
