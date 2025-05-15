@@ -124,7 +124,7 @@ async fn main() -> eyre::Result<()> {
         ),
     };
 
-    let _join_set = NatsDipatcher::start_dispatcher(
+    let join_set = NatsDipatcher::start_dispatcher(
         &connection_string,
         state.clone(),
         handlers,
@@ -144,7 +144,9 @@ async fn main() -> eyre::Result<()> {
     }
 
     elegant_departure::tokio::depart()
-        // .on_completion(join_set.join_all())
+        .on_completion(async {
+            join_set.join_all().await;
+        })
         .on_termination()
         .await;
 
