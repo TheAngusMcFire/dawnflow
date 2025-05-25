@@ -7,10 +7,10 @@ edition = "2021"
 default = ["nats"]
 in_memory = []
 in_memory_only = ["in_memory"]
-nats=[ "dep:async-nats" ]
+nats=[ "dep:async-nats", "dep:serde_bytes" ]
 
 [dependencies]
-serde_bytes = "0.11"
+serde_bytes = { version = "0.11", optional = true }
 async-trait = "0.1"
 elegant-departure = { version = "0.3", features = ["tokio"] }
 eyre = "0.6"
@@ -36,4 +36,4 @@ required-features = ["in_memory_only"]
 name = "nats"
 path = "examples/nats.rs"
 # todo change this
-required-features = []
+required-features = ["nats"]
