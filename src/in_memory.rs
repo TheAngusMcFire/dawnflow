@@ -5,8 +5,10 @@ use crate::{
     Req,
 };
 
-impl<T: Send + Sync + 'static> IntoResponse<InMemoryResponse> for Result<T, eyre::Report> {
-    fn into_response(self) -> Response<InMemoryResponse> {
+impl<T: Send + Sync + 'static> IntoResponse<InMemoryMetadata, InMemoryResponse>
+    for Result<T, eyre::Report>
+{
+    fn into_response(self, _metadata: &InMemoryMetadata) -> Response<InMemoryResponse> {
         match self {
             Ok(p) => Response {
                 error_scope: None,
