@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use async_nats::Client;
+use async_nats::{subject::ToSubject, Client, Request};
 
 use crate::publisher::{BytePublisherBackend, PublisherError};
 
@@ -39,9 +39,12 @@ impl BytePublisherBackend for NatsPublisherBackend {
     }
 
     async fn pub_req(&self, name: &str, msg: Vec<u8>) -> Result<Vec<u8>, PublisherError> {
+        let request = Request::new()
+            .timeout(Some(Duration::from_secs(10)))
+            .payload(msg.into());
         Ok(self
             .client
-            .request(format!("request.{}", name), msg.into())
+            .send_request(format!("request.{}", name).to_subject(), request)
             .await?
             .payload
             .into())

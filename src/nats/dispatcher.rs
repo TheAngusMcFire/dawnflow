@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_nats::Message;
 use eyre::bail;
@@ -70,6 +70,7 @@ impl NatsDipatcher {
             Ok(x) => x,
             Err(err) => bail!("{}", err),
         });
+        let parallel_size = 10;
 
         for (name, handler) in reg.consumers {
             let mut sub = client.subscribe(format!("consumer.{}", name)).await?;
@@ -78,8 +79,12 @@ impl NatsDipatcher {
                 let guard = elegant_departure::get_shutdown_guard();
                 let mut join_set = JoinSet::<Response<NatsResponse>>::new();
                 loop {
-                    while let Some(x) = join_set.try_join_next() {
-                        let _ = Self::handle_join_result(x);
+                    while join_set.len() > parallel_size {
+                        while let Some(x) = join_set.try_join_next() {
+                            let _ = Self::handle_join_result(x);
+                        }
+                        tracing::warn!("Too many consumer jobs, waiting for consumer completions");
+                        tokio::time::sleep(Duration::from_millis(5)).await;
                     }
                     let next = if !join_set.is_empty() {
                         select! {
@@ -119,6 +124,7 @@ impl NatsDipatcher {
 
                     let metadata = NatsMetadata {
                         subject: Arc::new(next.subject),
+                        reply: None,
                     };
 
                     let state = state.clone();
@@ -139,8 +145,14 @@ impl NatsDipatcher {
                 let guard = elegant_departure::get_shutdown_guard();
                 let mut join_set = JoinSet::<Response<NatsResponse>>::new();
                 loop {
-                    while let Some(x) = join_set.try_join_next() {
-                        let _ = Self::handle_join_result(x);
+                    while join_set.len() > parallel_size {
+                        while let Some(x) = join_set.try_join_next() {
+                            let _ = Self::handle_join_result(x);
+                        }
+                        tracing::warn!(
+                            "Too many subscriber jobs, waiting for subscriber completions"
+                        );
+                        tokio::time::sleep(Duration::from_millis(5)).await;
                     }
 
                     let next = if !join_set.is_empty() {
@@ -181,6 +193,7 @@ impl NatsDipatcher {
 
                     let metadata = NatsMetadata {
                         subject: Arc::new(next.subject),
+                        reply: None,
                     };
 
                     for handler in &handler {
@@ -207,16 +220,18 @@ impl NatsDipatcher {
                 let mut shutdown = false;
                 let mut join_set = JoinSet::<Response<NatsResponse>>::new();
                 loop {
+                    while join_set.len() > parallel_size {
                     while let Some(x) = if shutdown {join_set.join_next().await} else {join_set.try_join_next() }{
                         let res = match Self::handle_join_result(x) {
                             Ok(Response {
                                 payload:
                                     Some(NatsResponse {
                                         response,
-                                        subject: Some(sub),
+                                        reply: Some(reply),
+                                        ..
                                     }),
                                 ..
-                            }) => client.publish(sub.as_ref().clone(), response.into()).await,
+                            }) => client.publish(reply.as_ref().clone(), response.into()).await,
                             _ => {
                                 continue;
                             }
@@ -227,6 +242,9 @@ impl NatsDipatcher {
                             }
                             _ => continue,
                         }
+                    }
+                        tracing::warn!("Too many request jobs, waiting for request completions");
+                        tokio::time::sleep(Duration::from_millis(5)).await;
                     }
 
                     if shutdown {
@@ -268,6 +286,7 @@ impl NatsDipatcher {
 
                             let metadata = NatsMetadata {
                                 subject: Arc::new(next.subject),
+                                reply: next.reply.map(Arc::new),
                             };
 
                             let state = state.clone();
@@ -285,10 +304,11 @@ impl NatsDipatcher {
                                     payload:
                                         Some(NatsResponse {
                                             response,
-                                            subject: Some(sub),
+                                            reply: Some(reply),
+                                            ..
                                         }),
                                     ..
-                                }) => client.publish(sub.as_ref().clone(), response.into()).await,
+                                }) => client.publish(reply.as_ref().clone(), response.into()).await,
                                 _ => {
                                     continue;
                                 }
@@ -305,6 +325,6 @@ impl NatsDipatcher {
                 }
             });
         }
-        todo!()
+        Ok(join_set)
     }
 }

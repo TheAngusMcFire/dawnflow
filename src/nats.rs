@@ -23,6 +23,7 @@ impl<T: Serialize + Send + Sync + 'static> IntoResponse<NatsMetadata, NatsRespon
                 payload: Some(NatsResponse {
                     response: rmp_serde::to_vec(&p).unwrap(),
                     subject: Some(metadata.subject.clone()),
+                    reply: metadata.reply.clone(),
                 }),
                 handler_name: None,
             },
@@ -54,6 +55,7 @@ impl<T: Serialize + Send + Sync + 'static> IntoResponse<NatsMetadata, NatsRespon
 #[derive(Clone)]
 pub struct NatsMetadata {
     pub subject: Arc<Subject>,
+    pub reply: Option<Arc<Subject>>,
 }
 
 #[derive(Clone)]
@@ -66,6 +68,7 @@ pub struct NatsResponse {
     pub response: Vec<u8>,
     /// if we do not have a subject, we have no one to return the data to
     pub subject: Option<Arc<Subject>>,
+    pub reply: Option<Arc<Subject>>,
 }
 
 #[async_trait::async_trait]
@@ -78,6 +81,8 @@ impl<T: DeserializeOwned, S> FromRequestBody<S, NatsPayload, NatsMetadata, NatsR
         _meta: &mut NatsMetadata,
         _state: &S,
     ) -> Result<Self, Self::Rejection> {
+        // dbg!(std::any::type_name::<T>());
+        // dbg!(&req.payload.len());
         let resp = match rmp_serde::from_slice(req.payload.as_slice()) {
             Ok(x) => x,
             Err(err) => return Err(err.into()),
