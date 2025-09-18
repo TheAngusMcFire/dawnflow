@@ -49,4 +49,9 @@ impl BytePublisherBackend for NatsPublisherBackend {
             .payload
             .into())
     }
+
+    async fn flush(&self) -> Result<(), PublisherError> {
+        self.client.flush().await?;
+        Ok(())
+    }
 }

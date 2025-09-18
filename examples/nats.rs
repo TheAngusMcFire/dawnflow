@@ -168,6 +168,8 @@ async fn main() -> eyre::Result<()> {
         // tokio::time::sleep(Duration::from_millis(3)).await;
     }
 
+    state.publisher.flush().await?;
+
     elegant_departure::tokio::depart()
         .on_completion(async {
             join_set.join_all().await;

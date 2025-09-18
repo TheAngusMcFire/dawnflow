@@ -19,6 +19,8 @@ pub enum PublisherError {
     NatsPublishingError(#[from] async_nats::PublishError),
     #[error("nats request error: {0}")]
     NatsRequestError(#[from] async_nats::RequestError),
+    #[error("nats flush error: {0}")]
+    NatsFlushError(#[from] async_nats::client::FlushError),
 }
 
 #[async_trait::async_trait]
@@ -32,6 +34,7 @@ pub trait BytePublisherBackend: Send + Sync {
     async fn pub_cons(&self, name: &str, msg: Vec<u8>) -> Result<(), PublisherError>;
 
     async fn pub_req(&self, name: &str, msg: Vec<u8>) -> Result<Vec<u8>, PublisherError>;
+    async fn flush(&self) -> Result<(), PublisherError>;
 }
 
 pub enum PublisherBackend {
@@ -94,6 +97,12 @@ impl Publisher {
                 Ok(serde_json::from_slice(data)
                     .map_err(|x| PublisherError::Serde(x.to_string()))?)
             }
+        }
+    }
+    pub async fn flush(&self) -> Result<(), PublisherError> {
+        match &self.backend {
+            PublisherBackend::InMemory { .. } => Ok(()),
+            PublisherBackend::ByteBackend { backend } => backend.flush().await,
         }
     }
 
