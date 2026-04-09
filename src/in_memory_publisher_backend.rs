@@ -47,6 +47,27 @@ pub trait InMemoryPublisherBackend: Send + Sync {
         name: &str,
         msg: Box<dyn std::any::Any + Send + Sync + 'static>,
     ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, PublisherError>;
+
+    async fn pub_sub_with_opts(
+        &self,
+        name: &str,
+        msg: Box<dyn AnyCloneFactory>,
+        opts: &crate::publisher::PubSubOptions,
+    ) -> Result<(), PublisherError>;
+
+    async fn pub_cons_with_opts(
+        &self,
+        name: &str,
+        msg: Box<dyn std::any::Any + Send + Sync + 'static>,
+        opts: &crate::publisher::PubConsOptions,
+    ) -> Result<(), PublisherError>;
+
+    async fn pub_req_with_opts(
+        &self,
+        name: &str,
+        msg: Box<dyn std::any::Any + Send + Sync + 'static>,
+        opts: &crate::publisher::PubReqOptions,
+    ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, PublisherError>;
 }
 
 pub struct DefaultInMemoryPublisherBackend<S: Clone + Sync + Send + 'static> {
@@ -307,18 +328,52 @@ impl<S: Clone + Sync + Send + 'static> InMemoryPublisherBackend
         name: &str,
         msg: Box<dyn std::any::Any + Send + Sync + 'static>,
     ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, PublisherError> {
+        self.pub_req_with_opts(name, msg, &crate::publisher::PubReqOptions::default())
+            .await
+    }
+
+    async fn pub_sub_with_opts(
+        &self,
+        name: &str,
+        msg: Box<dyn AnyCloneFactory>,
+        _opts: &crate::publisher::PubSubOptions,
+    ) -> Result<(), PublisherError> {
+        self.pub_sub(name, msg).await
+    }
+
+    async fn pub_cons_with_opts(
+        &self,
+        name: &str,
+        msg: Box<dyn std::any::Any + Send + Sync + 'static>,
+        _opts: &crate::publisher::PubConsOptions,
+    ) -> Result<(), PublisherError> {
+        self.pub_cons(name, msg).await
+    }
+
+    async fn pub_req_with_opts(
+        &self,
+        name: &str,
+        msg: Box<dyn std::any::Any + Send + Sync + 'static>,
+        opts: &crate::publisher::PubReqOptions,
+    ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, PublisherError> {
         let Some(call) = self.handlers.get(name) else {
             return Err(PublisherError::EndpointNotFound(name.to_string()));
         };
-        let ret = call
-            .call(
-                crate::handlers::HandlerRequest {
-                    metadata: InMemoryMetadata {},
-                    payload: InMemoryPayload { payload: msg },
-                },
-                self.state.clone(),
-            )
-            .await;
+        let fut = call.call(
+            crate::handlers::HandlerRequest {
+                metadata: InMemoryMetadata {},
+                payload: InMemoryPayload { payload: msg },
+            },
+            self.state.clone(),
+        );
+
+        let ret = if let Some(duration) = opts.timeout {
+            tokio::time::timeout(duration, fut)
+                .await
+                .map_err(|_| PublisherError::Timeout)?
+        } else {
+            fut.await
+        };
 
         if let Some(report) = ret.report {
             return Err(PublisherError::Eyre(report));

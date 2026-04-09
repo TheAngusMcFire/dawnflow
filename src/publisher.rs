@@ -21,6 +21,46 @@ pub enum PublisherError {
     NatsRequestError(#[from] async_nats::RequestError),
     #[error("nats flush error: {0}")]
     NatsFlushError(#[from] async_nats::client::FlushError),
+    #[error("operation timed out")]
+    Timeout,
+}
+
+pub struct PubSubOptions {}
+
+impl Default for PubSubOptions {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
+pub struct PubConsOptions {}
+
+impl Default for PubConsOptions {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
+pub struct PubReqOptions {
+    pub timeout: Option<std::time::Duration>,
+}
+
+impl Default for PubReqOptions {
+    fn default() -> Self {
+        Self { timeout: None }
+    }
+}
+
+impl PubReqOptions {
+    pub fn with_timeout(mut self, d: std::time::Duration) -> Self {
+        self.timeout = Some(d);
+        self
+    }
+
+    pub fn timeout_secs(mut self, secs: u64) -> Self {
+        self.timeout = Some(std::time::Duration::from_secs(secs));
+        self
+    }
 }
 
 #[async_trait::async_trait]
@@ -35,6 +75,27 @@ pub trait BytePublisherBackend: Send + Sync {
 
     async fn pub_req(&self, name: &str, msg: Vec<u8>) -> Result<Vec<u8>, PublisherError>;
     async fn flush(&self) -> Result<(), PublisherError>;
+
+    async fn pub_sub_with_opts(
+        &self,
+        name: &str,
+        msg: Vec<u8>,
+        opts: &PubSubOptions,
+    ) -> Result<(), PublisherError>;
+
+    async fn pub_cons_with_opts(
+        &self,
+        name: &str,
+        msg: Vec<u8>,
+        opts: &PubConsOptions,
+    ) -> Result<(), PublisherError>;
+
+    async fn pub_req_with_opts(
+        &self,
+        name: &str,
+        msg: Vec<u8>,
+        opts: &PubReqOptions,
+    ) -> Result<Vec<u8>, PublisherError>;
 }
 
 pub enum PublisherBackend {
@@ -99,6 +160,7 @@ impl Publisher {
             }
         }
     }
+
     pub async fn flush(&self) -> Result<(), PublisherError> {
         match &self.backend {
             PublisherBackend::InMemory { .. } => Ok(()),
@@ -106,13 +168,44 @@ impl Publisher {
         }
     }
 
+    // --- non-in_memory_only variants ---
+
     #[cfg(not(feature = "in_memory_only"))]
     pub async fn pub_sub<T: Clone + serde::Serialize + Send + Sync + 'static>(
         &self,
         msg: T,
     ) -> Result<(), PublisherError> {
+        self.pub_sub_with_opts(msg, |x| x).await
+    }
+
+    #[cfg(not(feature = "in_memory_only"))]
+    pub async fn pub_cons<T: serde::Serialize + Send + Sync + 'static>(
+        &self,
+        msg: T,
+    ) -> Result<(), PublisherError> {
+        self.pub_cons_with_opts(msg, |x| x).await
+    }
+
+    #[cfg(not(feature = "in_memory_only"))]
+    pub async fn pub_req<
+        TReq: serde::Serialize + Send + Sync + 'static,
+        TResp: serde::de::DeserializeOwned + Send + Sync + 'static,
+    >(
+        &self,
+        msg: TReq,
+    ) -> Result<TResp, PublisherError> {
+        self.pub_req_with_opts(msg, |x| x).await
+    }
+
+    #[cfg(not(feature = "in_memory_only"))]
+    pub async fn pub_sub_with_opts<T: Clone + serde::Serialize + Send + Sync + 'static>(
+        &self,
+        msg: T,
+        f: impl FnOnce(PubSubOptions) -> PubSubOptions,
+    ) -> Result<(), PublisherError> {
         use crate::in_memory_publisher_backend::SubscriberCloneFactory;
 
+        let opts = f(PubSubOptions::default());
         let name = Self::get_obj_name::<T>();
         match &self.backend {
             PublisherBackend::InMemory { backend } => {
@@ -125,22 +218,24 @@ impl Publisher {
                     .await
                     .as_ref()
                     .unwrap()
-                    .pub_sub(name, Box::new(sub_fact))
+                    .pub_sub_with_opts(name, Box::new(sub_fact), &opts)
                     .await?;
             }
             PublisherBackend::ByteBackend { backend } => {
                 let data = self.serialize_req(&msg)?;
-                backend.pub_sub(name, data).await?;
+                backend.pub_sub_with_opts(name, data, &opts).await?;
             }
         }
         Ok(())
     }
 
     #[cfg(not(feature = "in_memory_only"))]
-    pub async fn pub_cons<T: serde::Serialize + Send + Sync + 'static>(
+    pub async fn pub_cons_with_opts<T: serde::Serialize + Send + Sync + 'static>(
         &self,
         msg: T,
+        f: impl FnOnce(PubConsOptions) -> PubConsOptions,
     ) -> Result<(), PublisherError> {
+        let opts = f(PubConsOptions::default());
         let name = Self::get_obj_name::<T>();
         match &self.backend {
             PublisherBackend::InMemory { backend } => {
@@ -149,25 +244,27 @@ impl Publisher {
                     .await
                     .as_ref()
                     .unwrap()
-                    .pub_cons(name, Box::new(msg))
+                    .pub_cons_with_opts(name, Box::new(msg), &opts)
                     .await?;
             }
             PublisherBackend::ByteBackend { backend } => {
                 let data = self.serialize_req(&msg)?;
-                backend.pub_cons(name, data).await?;
+                backend.pub_cons_with_opts(name, data, &opts).await?;
             }
         }
         Ok(())
     }
 
     #[cfg(not(feature = "in_memory_only"))]
-    pub async fn pub_req<
+    pub async fn pub_req_with_opts<
         TReq: serde::Serialize + Send + Sync + 'static,
         TResp: serde::de::DeserializeOwned + Send + Sync + 'static,
     >(
         &self,
         msg: TReq,
+        f: impl FnOnce(PubReqOptions) -> PubReqOptions,
     ) -> Result<TResp, PublisherError> {
+        let opts = f(PubReqOptions::default());
         let name = Self::get_obj_name::<TReq>();
         match &self.backend {
             PublisherBackend::InMemory { backend } => {
@@ -176,28 +273,53 @@ impl Publisher {
                     .await
                     .as_ref()
                     .unwrap()
-                    .pub_req(name, Box::new(msg))
+                    .pub_req_with_opts(name, Box::new(msg), &opts)
                     .await?;
-                return match res.downcast::<TResp>() {
+                match res.downcast::<TResp>() {
                     Ok(x) => Ok(*x),
                     Err(_) => Err(PublisherError::DowncastError),
-                };
+                }
             }
             PublisherBackend::ByteBackend { backend } => {
                 let data = self.serialize_req(&msg)?;
-                let res = backend.pub_req(name, data).await?;
+                let res = backend.pub_req_with_opts(name, data, &opts).await?;
                 Ok(self.de_serialize_req::<TResp>(res.as_slice())?)
             }
         }
     }
+
+    // --- in_memory_only variants ---
 
     #[cfg(feature = "in_memory_only")]
     pub async fn pub_sub<T: Clone + Send + Sync + 'static>(
         &self,
         msg: T,
     ) -> Result<(), PublisherError> {
+        self.pub_sub_with_opts(msg, |x| x).await
+    }
+
+    #[cfg(feature = "in_memory_only")]
+    pub async fn pub_cons<T: Send + Sync + 'static>(&self, msg: T) -> Result<(), PublisherError> {
+        self.pub_cons_with_opts(msg, |x| x).await
+    }
+
+    #[cfg(feature = "in_memory_only")]
+    pub async fn pub_req<TReq: Send + Sync + 'static, TResp: Send + Sync + 'static>(
+        &self,
+        msg: TReq,
+    ) -> Result<TResp, PublisherError> {
+        self.pub_req_with_opts::<TReq, TResp>(msg, |x| x).await
+    }
+
+    #[cfg(feature = "in_memory_only")]
+    pub async fn pub_sub_with_opts<T: Clone + Send + Sync + 'static>(
+        &self,
+        msg: T,
+        f: impl FnOnce(PubSubOptions) -> PubSubOptions,
+    ) -> Result<(), PublisherError> {
         use crate::in_memory_publisher_backend::SubscriberCloneFactory;
 
+        let opts = f(PubSubOptions::default());
         let name = Self::get_obj_name::<T>();
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
@@ -211,12 +333,17 @@ impl Publisher {
             .await
             .as_ref()
             .unwrap()
-            .pub_sub(name, Box::new(sub_fact))
+            .pub_sub_with_opts(name, Box::new(sub_fact), &opts)
             .await
     }
 
     #[cfg(feature = "in_memory_only")]
-    pub async fn pub_cons<T: Send + Sync + 'static>(&self, msg: T) -> Result<(), PublisherError> {
+    pub async fn pub_cons_with_opts<T: Send + Sync + 'static>(
+        &self,
+        msg: T,
+        f: impl FnOnce(PubConsOptions) -> PubConsOptions,
+    ) -> Result<(), PublisherError> {
+        let opts = f(PubConsOptions::default());
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
@@ -226,15 +353,17 @@ impl Publisher {
             .await
             .as_ref()
             .unwrap()
-            .pub_cons(name, Box::new(msg))
+            .pub_cons_with_opts(name, Box::new(msg), &opts)
             .await
     }
 
     #[cfg(feature = "in_memory_only")]
-    pub async fn pub_req<TReq: Send + Sync + 'static, TResp: Send + Sync + 'static>(
+    pub async fn pub_req_with_opts<TReq: Send + Sync + 'static, TResp: Send + Sync + 'static>(
         &self,
         msg: TReq,
+        f: impl FnOnce(PubReqOptions) -> PubReqOptions,
     ) -> Result<TResp, PublisherError> {
+        let opts = f(PubReqOptions::default());
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
@@ -244,7 +373,7 @@ impl Publisher {
             .await
             .as_ref()
             .unwrap()
-            .pub_req(name, Box::new(msg))
+            .pub_req_with_opts(name, Box::new(msg), &opts)
             .await?;
         match res.downcast::<TResp>() {
             Ok(x) => Ok(*x),
