@@ -1,9 +1,8 @@
 use tokio::sync::RwLock;
 
-use crate::{
-    in_memory_publisher_backend::InMemoryPublisherBackend,
-    nats::publisher_backend::NatsPublisherBackend,
-};
+use crate::in_memory_publisher_backend::InMemoryPublisherBackend;
+#[cfg(feature = "nats")]
+use crate::nats::publisher_backend::NatsPublisherBackend;
 
 #[derive(thiserror::Error, Debug)]
 pub enum PublisherError {
@@ -15,39 +14,79 @@ pub enum PublisherError {
     Eyre(eyre::Report),
     #[error("serialize error: {0}")]
     Serde(String),
+    #[cfg(feature = "nats")]
     #[error("nats publish error: {0}")]
     NatsPublishingError(#[from] async_nats::PublishError),
+    #[cfg(feature = "nats")]
     #[error("nats request error: {0}")]
     NatsRequestError(#[from] async_nats::RequestError),
+    #[cfg(feature = "nats")]
     #[error("nats flush error: {0}")]
     NatsFlushError(#[from] async_nats::client::FlushError),
     #[error("operation timed out")]
     Timeout,
 }
 
-pub struct PubSubOptions {}
+pub struct PubSubOptions {
+    /// Optional target receiver name. When set, the message is routed to the
+    /// composite key `{type}.{target}` so it reaches only handlers registered
+    /// for that target (see `HandlerRegistry::register_subscriber_with_target`).
+    /// The target becomes part of a NATS subject, so it must not contain NATS
+    /// subject separators/wildcards (` `, `.`, `*`, `>`).
+    pub target: Option<String>,
+}
 
 impl Default for PubSubOptions {
     fn default() -> Self {
-        Self {}
+        Self { target: None }
     }
 }
 
-pub struct PubConsOptions {}
+impl PubSubOptions {
+    pub fn target(mut self, t: impl Into<String>) -> Self {
+        self.target = Some(t.into());
+        self
+    }
+}
+
+pub struct PubConsOptions {
+    /// Optional target receiver name. When set, the message is routed to the
+    /// composite key `{type}.{target}` so it reaches only the consumer
+    /// registered for that target (see `HandlerRegistry::register_consumer_with_target`).
+    /// The target becomes part of a NATS subject, so it must not contain NATS
+    /// subject separators/wildcards (` `, `.`, `*`, `>`).
+    pub target: Option<String>,
+}
 
 impl Default for PubConsOptions {
     fn default() -> Self {
-        Self {}
+        Self { target: None }
+    }
+}
+
+impl PubConsOptions {
+    pub fn target(mut self, t: impl Into<String>) -> Self {
+        self.target = Some(t.into());
+        self
     }
 }
 
 pub struct PubReqOptions {
     pub timeout: Option<std::time::Duration>,
+    /// Optional target receiver name. When set, the request is routed to the
+    /// composite key `{type}.{target}` so it reaches only the handler
+    /// registered for that target (see `HandlerRegistry::register_handler_with_target`).
+    /// The target becomes part of a NATS subject, so it must not contain NATS
+    /// subject separators/wildcards (` `, `.`, `*`, `>`).
+    pub target: Option<String>,
 }
 
 impl Default for PubReqOptions {
     fn default() -> Self {
-        Self { timeout: None }
+        Self {
+            timeout: None,
+            target: None,
+        }
     }
 }
 
@@ -59,6 +98,11 @@ impl PubReqOptions {
 
     pub fn timeout_secs(mut self, secs: u64) -> Self {
         self.timeout = Some(std::time::Duration::from_secs(secs));
+        self
+    }
+
+    pub fn target(mut self, t: impl Into<String>) -> Self {
+        self.target = Some(t.into());
         self
     }
 }
@@ -124,6 +168,16 @@ impl Publisher {
             .split("::")
             .last()
             .expect("there shouln be at least one thingto the name")
+    }
+
+    /// Computes the routing key for a message. Without a target this is just the
+    /// type name (no allocation); with a target it is the composite `{type}.{target}`.
+    fn routing_name<T>(target: &Option<String>) -> std::borrow::Cow<'static, str> {
+        let base = Self::get_obj_name::<T>();
+        match target {
+            Some(t) => std::borrow::Cow::Owned(format!("{base}.{t}")),
+            None => std::borrow::Cow::Borrowed(base),
+        }
     }
 
     pub fn serialize_req<T: serde::Serialize>(&self, req: &T) -> Result<Vec<u8>, PublisherError> {
@@ -206,7 +260,7 @@ impl Publisher {
         use crate::in_memory_publisher_backend::SubscriberCloneFactory;
 
         let opts = f(PubSubOptions::default());
-        let name = Self::get_obj_name::<T>();
+        let name = Self::routing_name::<T>(&opts.target);
         match &self.backend {
             PublisherBackend::InMemory { backend } => {
                 let sub_fact = SubscriberCloneFactory::<T> {
@@ -218,12 +272,12 @@ impl Publisher {
                     .await
                     .as_ref()
                     .unwrap()
-                    .pub_sub_with_opts(name, Box::new(sub_fact), &opts)
+                    .pub_sub_with_opts(&name, Box::new(sub_fact), &opts)
                     .await?;
             }
             PublisherBackend::ByteBackend { backend } => {
                 let data = self.serialize_req(&msg)?;
-                backend.pub_sub_with_opts(name, data, &opts).await?;
+                backend.pub_sub_with_opts(&name, data, &opts).await?;
             }
         }
         Ok(())
@@ -236,7 +290,7 @@ impl Publisher {
         f: impl FnOnce(PubConsOptions) -> PubConsOptions,
     ) -> Result<(), PublisherError> {
         let opts = f(PubConsOptions::default());
-        let name = Self::get_obj_name::<T>();
+        let name = Self::routing_name::<T>(&opts.target);
         match &self.backend {
             PublisherBackend::InMemory { backend } => {
                 backend
@@ -244,12 +298,12 @@ impl Publisher {
                     .await
                     .as_ref()
                     .unwrap()
-                    .pub_cons_with_opts(name, Box::new(msg), &opts)
+                    .pub_cons_with_opts(&name, Box::new(msg), &opts)
                     .await?;
             }
             PublisherBackend::ByteBackend { backend } => {
                 let data = self.serialize_req(&msg)?;
-                backend.pub_cons_with_opts(name, data, &opts).await?;
+                backend.pub_cons_with_opts(&name, data, &opts).await?;
             }
         }
         Ok(())
@@ -265,7 +319,7 @@ impl Publisher {
         f: impl FnOnce(PubReqOptions) -> PubReqOptions,
     ) -> Result<TResp, PublisherError> {
         let opts = f(PubReqOptions::default());
-        let name = Self::get_obj_name::<TReq>();
+        let name = Self::routing_name::<TReq>(&opts.target);
         match &self.backend {
             PublisherBackend::InMemory { backend } => {
                 let res = backend
@@ -273,7 +327,7 @@ impl Publisher {
                     .await
                     .as_ref()
                     .unwrap()
-                    .pub_req_with_opts(name, Box::new(msg), &opts)
+                    .pub_req_with_opts(&name, Box::new(msg), &opts)
                     .await?;
                 match res.downcast::<TResp>() {
                     Ok(x) => Ok(*x),
@@ -282,7 +336,7 @@ impl Publisher {
             }
             PublisherBackend::ByteBackend { backend } => {
                 let data = self.serialize_req(&msg)?;
-                let res = backend.pub_req_with_opts(name, data, &opts).await?;
+                let res = backend.pub_req_with_opts(&name, data, &opts).await?;
                 Ok(self.de_serialize_req::<TResp>(res.as_slice())?)
             }
         }
@@ -320,7 +374,7 @@ impl Publisher {
         use crate::in_memory_publisher_backend::SubscriberCloneFactory;
 
         let opts = f(PubSubOptions::default());
-        let name = Self::get_obj_name::<T>();
+        let name = Self::routing_name::<T>(&opts.target);
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
@@ -333,7 +387,7 @@ impl Publisher {
             .await
             .as_ref()
             .unwrap()
-            .pub_sub_with_opts(name, Box::new(sub_fact), &opts)
+            .pub_sub_with_opts(&name, Box::new(sub_fact), &opts)
             .await
     }
 
@@ -347,13 +401,13 @@ impl Publisher {
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
-        let name = Self::get_obj_name::<T>();
+        let name = Self::routing_name::<T>(&opts.target);
         backend
             .read()
             .await
             .as_ref()
             .unwrap()
-            .pub_cons_with_opts(name, Box::new(msg), &opts)
+            .pub_cons_with_opts(&name, Box::new(msg), &opts)
             .await
     }
 
@@ -367,13 +421,13 @@ impl Publisher {
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
-        let name = Self::get_obj_name::<TReq>();
+        let name = Self::routing_name::<TReq>(&opts.target);
         let res = backend
             .read()
             .await
             .as_ref()
             .unwrap()
-            .pub_req_with_opts(name, Box::new(msg), &opts)
+            .pub_req_with_opts(&name, Box::new(msg), &opts)
             .await?;
         match res.downcast::<TResp>() {
             Ok(x) => Ok(*x),

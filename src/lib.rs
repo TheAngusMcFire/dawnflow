@@ -9,6 +9,9 @@ pub mod registry;
 #[cfg(feature = "nats")]
 pub mod nats;
 
+#[cfg(feature = "dawnjection")]
+pub mod dawnjection;
+
 #[cfg(all(feature = "in_memory", feature = "nats"))]
 compile_error!("features `feature/in_memory` and `feature/nats` are mutually exclusive");
 

@@ -44,6 +44,7 @@ impl BytePublisherBackend for NatsPublisherBackend {
             msg,
             &PubReqOptions {
                 timeout: Some(Duration::from_secs(10)),
+                ..Default::default()
             },
         )
         .await

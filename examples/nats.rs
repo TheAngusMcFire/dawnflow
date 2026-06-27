@@ -71,6 +71,17 @@ pub async fn consumer(state: MyState, Req(sub): Req<Consumable>) -> eyre::Result
     Ok(())
 }
 
+// Targeted consumer: only receives Consumables published with target "consumer1".
+// Subscribes to the NATS subject `consumer.Consumable.consumer1`.
+pub async fn consumer1(_state: MyState, Req(sub): Req<Consumable>) -> eyre::Result<()> {
+    tracing::warn!(
+        "consumer1 (targeted) received Consumable name={} id={}",
+        sub.name,
+        sub.id
+    );
+    Ok(())
+}
+
 pub async fn request1(state: MyState, Req(sub): Req<Request1>) -> eyre::Result<Response1> {
     // dbg!(sub);
     let _resp: Response2 = state
@@ -128,6 +139,8 @@ async fn main() -> eyre::Result<()> {
     let handlers = handlers
         .register_subscriber::<Subscribable, _, _>(subscriber)
         .register_consumer::<Consumable, _, _>(consumer)
+        // Targeted route: Consumables published with target "consumer1" land here only.
+        .register_consumer_with_target::<Consumable, _, _>("consumer1", consumer1)
         .register_handler::<Request1, _, _>(request1)
         .register_handler::<Request2, _, _>(request2);
 
@@ -150,6 +163,19 @@ async fn main() -> eyre::Result<()> {
     .await?;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Targeted delivery: only the "consumer1" handler receives this one.
+    state
+        .publisher
+        .pub_cons_with_opts(
+            Consumable {
+                name: "targeted".into(),
+                id: 999,
+            },
+            |o| o.target("consumer1"),
+        )
+        .await
+        .unwrap();
 
     let data = (0..100000)
         .map(|x: i32| (x % 256) as u8)

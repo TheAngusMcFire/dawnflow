@@ -64,6 +64,16 @@ pub async fn consumer(state: MyState, Req(_sub): Req<Consumable>) -> eyre::Resul
     Ok(())
 }
 
+// Targeted consumer: only receives Consumables published with target "consumer1".
+pub async fn consumer1(_state: MyState, Req(c): Req<Consumable>) -> eyre::Result<()> {
+    tracing::info!(
+        "consumer1 (targeted) received Consumable name={} id={}",
+        c.name,
+        c.id
+    );
+    Ok(())
+}
+
 pub async fn request1(state: MyState, Req(_sub): Req<Request1>) -> eyre::Result<Response1> {
     let _resp: Response2 = state
         .publisher
@@ -113,6 +123,8 @@ async fn main() {
     let handlers = handlers
         .register_subscriber::<Subscribable, _, _>(subscriber)
         .register_consumer::<Consumable, _, _>(consumer)
+        // Targeted route: Consumables published with target "consumer1" land here only.
+        .register_consumer_with_target::<Consumable, _, _>("consumer1", consumer1)
         .register_handler::<Request1, _, _>(request1)
         .register_handler::<Request2, _, _>(request2);
 
@@ -134,6 +146,29 @@ async fn main() {
             .await
             .unwrap();
     }
+
+    // Untargeted: routed to the plain `consumer` handler.
+    state
+        .publisher
+        .pub_cons(Consumable {
+            name: "broadcast".into(),
+            id: 100,
+        })
+        .await
+        .unwrap();
+
+    // Targeted: routed only to the consumer registered for "consumer1".
+    state
+        .publisher
+        .pub_cons_with_opts(
+            Consumable {
+                name: "targeted".into(),
+                id: 200,
+            },
+            |o| o.target("consumer1"),
+        )
+        .await
+        .unwrap();
 
     elegant_departure::tokio::depart()
         // .on_completion(join_set.join_all())

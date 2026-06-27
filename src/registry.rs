@@ -90,6 +90,66 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
         self.register_handler_with_name(name, handler)
     }
 
+    /// Registers a consumer for a specific target receiver. The handler is keyed
+    /// under the composite name `{type}.{target}` so it only receives messages
+    /// published with the matching target (see `Publisher::pub_cons_with_opts`
+    /// and `PubConsOptions::target`).
+    pub fn register_consumer_with_target<
+        TSub,
+        T: Send + Sync + 'static,
+        H: Handler<T, S, P, M, R> + Send + Sync + 'static,
+    >(
+        self,
+        target: impl AsRef<str>,
+        handler: H,
+    ) -> Self {
+        let base = std::any::type_name::<TSub>()
+            .split("::")
+            .last()
+            .expect("there shouln be at least one thingto the name");
+        self.register_consumer_with_name(format!("{base}.{}", target.as_ref()), handler)
+    }
+
+    /// Registers a subscriber for a specific target receiver. The handler is keyed
+    /// under the composite name `{type}.{target}` so it only receives messages
+    /// published with the matching target (see `Publisher::pub_sub_with_opts`
+    /// and `PubSubOptions::target`).
+    pub fn register_subscriber_with_target<
+        TSub,
+        T: Send + Sync + 'static,
+        H: Handler<T, S, P, M, R> + Send + Sync + 'static,
+    >(
+        self,
+        target: impl AsRef<str>,
+        handler: H,
+    ) -> Self {
+        let base = std::any::type_name::<TSub>()
+            .split("::")
+            .last()
+            .expect("there shouln be at least one thingto the name");
+        self.register_subscriber_with_name(format!("{base}.{}", target.as_ref()), handler)
+    }
+
+    /// Registers a request handler for a specific target receiver. The handler is
+    /// keyed under the composite name `{type}.{target}` so it only receives
+    /// requests published with the matching target (see `Publisher::pub_req_with_opts`
+    /// and `PubReqOptions::target`).
+    pub fn register_handler_with_target<
+        TSub,
+        T: Send + Sync + 'static,
+        H: Handler<T, S, P, M, R> + Send + Sync + 'static,
+    >(
+        self,
+        target: impl AsRef<str>,
+        handler: H,
+    ) -> Self {
+        let base = std::any::type_name::<TSub>()
+            .split("::")
+            .last()
+            .expect("there shouln be at least one thingto the name");
+        self.register_handler_with_name(format!("{base}.{}", target.as_ref()), handler)
+    }
+
     pub fn register_consumer_with_name<
         N: Into<String>,
         T: Send + Sync + 'static,

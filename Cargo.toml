@@ -8,6 +8,7 @@ default = ["nats"]
 in_memory = []
 in_memory_only = ["in_memory"]
 nats=[ "dep:async-nats", "dep:serde_bytes" ]
+dawnjection = ["dep:dawnjection"]
 
 [dependencies]
 serde_bytes = { version = "0.11", optional = true }
@@ -24,6 +25,11 @@ tracing = "0.1"
 async-nats = { version = "0.42", optional = true }
 futures = "0.3.31"
 
+# Optional dawnjection DI integration (see `src/dawnjection.rs`). Pinned by tag so
+# dawnflow controls which dawnjection it integrates against; dawnjection itself no
+# longer depends on dawnflow.
+dawnjection = { git = "https://github.com/TheAngusMcFire/dawnjection.git", tag = "0.10.0", optional = true }
+
 [dev-dependencies]
 tracing-subscriber = { version = "0.3" }
 
@@ -37,3 +43,8 @@ name = "nats"
 path = "examples/nats.rs"
 # todo change this
 required-features = ["nats"]
+
+[[example]]
+name = "dawnjection"
+path = "examples/dawnjection.rs"
+required-features = ["dawnjection", "in_memory_only"]
