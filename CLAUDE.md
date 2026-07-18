@@ -50,7 +50,7 @@ Three communication patterns are supported via `Publisher`:
 
 **NATS backend** (`src/nats/`):
 - `publisher_backend.rs`: wraps `async_nats::Client`, publishes to subjects `subscriber.{name}`, `consumer.{name}`, `request.{name}`
-- `dispatcher.rs`: `NatsDispatcher` subscribes to all three subject prefixes, routes to the registry, and handles concurrent processing (up to 10 tasks per handler type). Graceful shutdown via `elegant_departure`.
+- `dispatcher.rs`: `NatsDispatcher` subscribes to all three subject prefixes, routes to the registry, and executes handlers per `DispatcherConfig` / `ExecutionMode`: `Concurrent { max_in_flight }` (task per message, default 10 in flight, unordered) or `Ordered` (single worker per handler type fed by a bounded queue, strict arrival order, panics caught per message via `catch_unwind`). Reply publishing for request handlers happens inside the handler task. Graceful shutdown via `elegant_departure`.
 
 ### Message flow
 

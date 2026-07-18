@@ -1,9 +1,8 @@
 pub mod dispatcher;
 pub mod publisher_backend;
 
-use std::sync::Arc;
-
 use async_nats::Subject;
+use bytes::Bytes;
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
@@ -52,23 +51,27 @@ impl<T: Serialize + Send + Sync + 'static> IntoResponse<NatsMetadata, NatsRespon
 //     }
 // }
 
+/// `Subject` is backed by `bytes::Bytes`, so cloning the metadata is cheap
+/// (reference count bump, no allocation).
 #[derive(Clone)]
 pub struct NatsMetadata {
-    pub subject: Arc<Subject>,
-    pub reply: Option<Arc<Subject>>,
+    pub subject: Subject,
+    pub reply: Option<Subject>,
 }
 
+/// The payload keeps the `Bytes` received from the NATS client as-is: no copy
+/// into an owned buffer, and fan-out clones only bump a reference count.
 #[derive(Clone)]
 pub struct NatsPayload {
-    pub payload: Arc<Vec<u8>>,
+    pub payload: Bytes,
 }
 
 pub struct NatsResponse {
     // todo maybe we wanne give that something to detect errors
     pub response: Vec<u8>,
     /// if we do not have a subject, we have no one to return the data to
-    pub subject: Option<Arc<Subject>>,
-    pub reply: Option<Arc<Subject>>,
+    pub subject: Option<Subject>,
+    pub reply: Option<Subject>,
 }
 
 #[async_trait::async_trait]
@@ -83,7 +86,7 @@ impl<T: DeserializeOwned, S> FromRequestBody<S, NatsPayload, NatsMetadata, NatsR
     ) -> Result<Self, Self::Rejection> {
         // dbg!(std::any::type_name::<T>());
         // dbg!(&req.payload.len());
-        let resp = match rmp_serde::from_slice(req.payload.as_slice()) {
+        let resp = match rmp_serde::from_slice(req.payload.as_ref()) {
             Ok(x) => x,
             Err(err) => return Err(err.into()),
         };

@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use dawnflow::{
     handlers::FromRequestMetadata,
-    nats::{dispatcher::NatsDipatcher, NatsMetadata, NatsPayload, NatsResponse},
+    nats::{dispatcher::NatsDispatcher, NatsMetadata, NatsPayload, NatsResponse},
     publisher::Publisher,
     registry::HandlerRegistry,
     Req,
@@ -154,7 +154,10 @@ async fn main() -> eyre::Result<()> {
         ),
     };
 
-    let join_set = NatsDipatcher::start_dispatcher(
+    // Default config: ExecutionMode::Concurrent { max_in_flight: 10 }.
+    // For strict per-handler ordering use start_dispatcher_with_config with
+    // DispatcherConfig { mode: ExecutionMode::Ordered, .. }.
+    let join_set = NatsDispatcher::start_dispatcher(
         &connection_string,
         state.clone(),
         handlers,
