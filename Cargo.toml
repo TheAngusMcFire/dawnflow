@@ -7,7 +7,7 @@ edition = "2021"
 default = ["nats"]
 in_memory = []
 in_memory_only = ["in_memory"]
-nats=[ "dep:async-nats", "dep:serde_bytes", "dep:bytes" ]
+nats=[ "dep:async-nats", "dep:serde_bytes", "dep:bytes", "dep:url", "dep:percent-encoding", "dep:rustls" ]
 dawnjection = ["dep:dawnjection"]
 
 [dependencies]
@@ -24,6 +24,11 @@ tracing = "0.1"
 
 async-nats = { version = "0.42", optional = true }
 bytes = { version = "1", optional = true }
+url = { version = "2", optional = true }
+percent-encoding = { version = "2", optional = true }
+# only used to pick ring as rustls crypto provider for TLS connections (see
+# `src/nats/connection.rs`); same provider async-nats is built with
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
 futures = "0.3.31"
 
 # Optional dawnjection DI integration (see `src/dawnjection.rs`). Pinned by tag so

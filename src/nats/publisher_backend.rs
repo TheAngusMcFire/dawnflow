@@ -1,17 +1,23 @@
 use std::{sync::Arc, time::Duration};
 
-use async_nats::{subject::ToSubject, Client, Request};
+use async_nats::{subject::ToSubject, Client, ConnectOptions, Request};
 
 use crate::publisher::{BytePublisherBackend, PubConsOptions, PubReqOptions, PubSubOptions, PublisherError};
+
+use super::connection;
 
 pub struct NatsPublisherBackend {
     client: Arc<Client>,
 }
 
 impl NatsPublisherBackend {
-    pub async fn new(nats_url: &str) -> Result<Self, async_nats::Error> {
+    /// `connection_string` may carry credentials and TLS settings, see
+    /// [`crate::nats::connection`].
+    pub async fn new(connection_string: &str) -> Result<Self, async_nats::Error> {
+        let (server, options) =
+            connection::configure(connection_string, ConnectOptions::new()).await?;
         Ok(Self {
-            client: Arc::new(async_nats::connect(nats_url).await?),
+            client: Arc::new(options.connect(server).await?),
         })
     }
 

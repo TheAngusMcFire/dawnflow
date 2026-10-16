@@ -1,3 +1,4 @@
+pub mod connection;
 pub mod dispatcher;
 pub mod publisher_backend;
 

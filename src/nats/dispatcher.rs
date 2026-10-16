@@ -22,7 +22,7 @@ use crate::{
 
 use futures::{stream::StreamExt, FutureExt};
 
-use super::{NatsMetadata, NatsPayload, NatsResponse};
+use super::{connection, NatsMetadata, NatsPayload, NatsResponse};
 
 type NatsHandlerArc<S> = HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>;
 
@@ -423,13 +423,13 @@ impl NatsDispatcher {
                     other => tracing::info!("NATS connection event: {other}"),
                 }
             });
+        let (server, options) = connection::configure(nats_url, options).await?;
         // connect on the ingestion runtime so the async-nats connection
         // handler task lives on its threads, immune to main-runtime
         // saturation by handler workloads
         let ingest = Self::spawn_ingestion_runtime()?;
-        let nats_url = nats_url.to_string();
         let client = match ingest
-            .spawn(async move { options.connect(nats_url).await })
+            .spawn(async move { options.connect(server).await })
             .await?
         {
             Ok(x) => x,
