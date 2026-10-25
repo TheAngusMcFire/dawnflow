@@ -1,6 +1,31 @@
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
-use crate::handlers::{Handler, HandlerRequest, Response};
+use crate::{
+    handlers::{Handler, HandlerRequest, Response},
+    publisher::{is_subject_token, Publisher},
+};
+
+/// The routing key of a message type, `{type}` or `{type}.{target}`. Panics
+/// at registration when a part can't be a NATS subject token: a target with
+/// `.`, `*`, `>` or whitespace would subscribe to other subjects (or break the
+/// protocol line), as would a generic type name like `X<A, B>`.
+fn routing_key<T>(target: Option<&str>) -> String {
+    let base = Publisher::get_obj_name::<T>();
+    assert!(
+        is_subject_token(base),
+        "dawnflow: the type name `{base}` can't be part of a NATS subject"
+    );
+    match target {
+        Some(target) => {
+            assert!(
+                is_subject_token(target),
+                "dawnflow: the target `{target}` can't be part of a NATS subject (no `.`, `*`, `>`, whitespace)"
+            );
+            format!("{base}.{target}")
+        }
+        None => base.to_string(),
+    }
+}
 
 pub type HandlerArc<P, M, S, R> = Arc<dyn HandlerCall<P, M, S, R> + Send + Sync>;
 
@@ -53,11 +78,7 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
         self,
         handler: H,
     ) -> Self {
-        let name = std::any::type_name::<TSub>()
-            .split("::")
-            .last()
-            .expect("there shouln be at least one thingto the name");
-        self.register_consumer_with_name(name, handler)
+        self.register_consumer_with_name(routing_key::<TSub>(None), handler)
     }
 
     pub fn register_subscriber<
@@ -68,11 +89,7 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
         self,
         handler: H,
     ) -> Self {
-        let name = std::any::type_name::<TSub>()
-            .split("::")
-            .last()
-            .expect("there shouln be at least one thingto the name");
-        self.register_subscriber_with_name(name, handler)
+        self.register_subscriber_with_name(routing_key::<TSub>(None), handler)
     }
 
     pub fn register_handler<
@@ -83,11 +100,7 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
         self,
         handler: H,
     ) -> Self {
-        let name = std::any::type_name::<TSub>()
-            .split("::")
-            .last()
-            .expect("there shouln be at least one thingto the name");
-        self.register_handler_with_name(name, handler)
+        self.register_handler_with_name(routing_key::<TSub>(None), handler)
     }
 
     /// Registers a consumer for a specific target receiver. The handler is keyed
@@ -103,11 +116,7 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
         target: impl AsRef<str>,
         handler: H,
     ) -> Self {
-        let base = std::any::type_name::<TSub>()
-            .split("::")
-            .last()
-            .expect("there shouln be at least one thingto the name");
-        self.register_consumer_with_name(format!("{base}.{}", target.as_ref()), handler)
+        self.register_consumer_with_name(routing_key::<TSub>(Some(target.as_ref())), handler)
     }
 
     /// Registers a subscriber for a specific target receiver. The handler is keyed
@@ -123,11 +132,7 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
         target: impl AsRef<str>,
         handler: H,
     ) -> Self {
-        let base = std::any::type_name::<TSub>()
-            .split("::")
-            .last()
-            .expect("there shouln be at least one thingto the name");
-        self.register_subscriber_with_name(format!("{base}.{}", target.as_ref()), handler)
+        self.register_subscriber_with_name(routing_key::<TSub>(Some(target.as_ref())), handler)
     }
 
     /// Registers a request handler for a specific target receiver. The handler is
@@ -143,11 +148,7 @@ impl<P: Send + 'static, M: Send + 'static, S: Send + 'static, R: Send + 'static>
         target: impl AsRef<str>,
         handler: H,
     ) -> Self {
-        let base = std::any::type_name::<TSub>()
-            .split("::")
-            .last()
-            .expect("there shouln be at least one thingto the name");
-        self.register_handler_with_name(format!("{base}.{}", target.as_ref()), handler)
+        self.register_handler_with_name(routing_key::<TSub>(Some(target.as_ref())), handler)
     }
 
     pub fn register_consumer_with_name<

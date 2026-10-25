@@ -1,13 +1,14 @@
 use std::{
     any::Any,
+    fmt,
     panic::AssertUnwindSafe,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
 };
 
-use async_nats::{Client, ConnectOptions, Event, Message, Subscriber};
+use async_nats::{Client, ConnectOptions, Event, HeaderMap, Message, Subject, Subscriber};
 use eyre::bail;
 use tokio::{
     select,
@@ -22,9 +23,12 @@ use crate::{
 
 use futures::{stream::StreamExt, FutureExt};
 
-use super::{connection, NatsMetadata, NatsPayload, NatsResponse};
+use super::{connection, NatsMetadata, NatsPayload, NatsResponse, ERROR_HEADER};
 
 type NatsHandlerArc<S> = HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>;
+
+/// How long a worker that ended waits for its queued replies to be written.
+const REPLY_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// How the dispatcher executes handler invocations for a single message type.
 #[derive(Clone, Copy, Debug)]
@@ -41,7 +45,7 @@ pub enum ExecutionMode {
     Ordered,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone)]
 pub struct DispatcherConfig {
     pub mode: ExecutionMode,
     /// Capacity of the in-process queue between the subscription reader and
@@ -66,6 +70,22 @@ pub struct DispatcherConfig {
     /// messages (repeated on every doubling, recovery is logged once the
     /// backlog halves below the threshold).
     pub backlog_warn_threshold: usize,
+    /// Called after the connection to NATS was re-established (not on the
+    /// first connect). Messages published while disconnected are lost (core
+    /// NATS keeps nothing), so this is the place to reload cached state.
+    pub on_reconnect: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl fmt::Debug for DispatcherConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DispatcherConfig")
+            .field("mode", &self.mode)
+            .field("queue_capacity", &self.queue_capacity)
+            .field("subscription_capacity", &self.subscription_capacity)
+            .field("backlog_warn_threshold", &self.backlog_warn_threshold)
+            .field("on_reconnect", &self.on_reconnect.is_some())
+            .finish()
+    }
 }
 
 impl Default for DispatcherConfig {
@@ -75,6 +95,7 @@ impl Default for DispatcherConfig {
             queue_capacity: None,
             subscription_capacity: 1024 * 64,
             backlog_warn_threshold: 10_000,
+            on_reconnect: None,
         }
     }
 }
@@ -185,17 +206,37 @@ pub struct NatsDispatcher {}
 pub type NatsDipatcher = NatsDispatcher;
 
 impl NatsDispatcher {
-    fn log_response(res: &Response<NatsResponse>) {
+    fn log_response(res: &Response<NatsResponse>, subject: &str) {
         if res.success {
-            tracing::debug!("Request handled successfully");
+            tracing::debug!("Request on {subject} handled successfully");
         } else {
             let handler_name = res.handler_name.unwrap_or("no-handler-name");
             match &res.report {
-                Some(report) => {
-                    tracing::error!("Error in handler: {handler_name}\nMessage:\n    {report:?}")
+                Some(report) => tracing::error!(
+                    "Error in handler {handler_name} for subject {subject}\nMessage:\n    {report:?}"
+                ),
+                None => {
+                    tracing::error!("Error in handler {handler_name} for subject {subject} (no report)")
                 }
-                None => tracing::error!("Error in handler: {handler_name} (no report)"),
             }
+        }
+    }
+
+    /// Tells a requester that no answer will come, so it doesn't wait for its
+    /// timeout: an empty reply with the [`ERROR_HEADER`].
+    async fn reply_error(client: &Client, reply: Subject, message: &str) {
+        let message: String = message
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .take(512)
+            .collect();
+        let mut headers = HeaderMap::new();
+        headers.insert(ERROR_HEADER, message.as_str());
+        if let Err(err) = client
+            .publish_with_headers(reply, headers, Default::default())
+            .await
+        {
+            tracing::error!("while publishing nats error reply: {err:?}");
         }
     }
 
@@ -232,9 +273,10 @@ impl NatsDispatcher {
         (metadata, payload)
     }
 
-    /// Runs a single handler call and, if the response carries a reply
+    /// Runs a single handler call and, if the message carries a reply
     /// subject, publishes the response from within the same task so the
-    /// ingestion loop never blocks on publishing.
+    /// ingestion loop never blocks on publishing. A request whose handler
+    /// fails, panics or whose response can't be sent gets an error reply.
     async fn invoke<S: Clone + Sync + Send + 'static>(
         handler: NatsHandlerArc<S>,
         metadata: NatsMetadata,
@@ -242,22 +284,37 @@ impl NatsDispatcher {
         state: S,
         client: Client,
     ) {
-        let response = handler
-            .call(HandlerRequest { metadata, payload }, state)
-            .await;
-        Self::log_response(&response);
-        if let Response {
-            payload:
-                Some(NatsResponse {
-                    response,
-                    reply: Some(reply),
-                    ..
-                }),
-            ..
-        } = response
-        {
-            if let Err(err) = client.publish(reply, response.into()).await {
-                tracing::error!("while publishing nats response: {err:?}");
+        let subject = metadata.subject.clone();
+        let reply = metadata.reply.clone();
+        let call = handler.call(HandlerRequest { metadata, payload }, state);
+        let response = match AssertUnwindSafe(call).catch_unwind().await {
+            Ok(response) => response,
+            Err(panic) => {
+                Self::log_panic(&subject, panic);
+                if let Some(reply) = reply {
+                    Self::reply_error(&client, reply, "the handler panicked").await;
+                }
+                return;
+            }
+        };
+        Self::log_response(&response, &subject);
+        let Some(reply) = reply else {
+            return;
+        };
+        let Response {
+            payload, report, ..
+        } = response;
+        match payload {
+            Some(NatsResponse { response, .. }) => {
+                if let Err(err) = client.publish(reply.clone(), response.into()).await {
+                    tracing::error!("while publishing nats response on {subject}: {err:?}");
+                    Self::reply_error(&client, reply, &format!("the reply could not be sent: {err}"))
+                        .await;
+                }
+            }
+            None => {
+                let message = report.map_or_else(|| "the handler failed".to_string(), |r| r.to_string());
+                Self::reply_error(&client, reply, &message).await;
             }
         }
     }
@@ -361,10 +418,15 @@ impl NatsDispatcher {
     /// handlers); a starved reader would otherwise let the client buffer
     /// overflow, which silently drops messages.
     ///
-    /// The owning thread parks until service shutdown and then drops the
-    /// runtime there (a runtime must not be dropped from async context).
-    fn spawn_ingestion_runtime() -> eyre::Result<tokio::runtime::Handle> {
+    /// The owning thread keeps the runtime until every clone of the returned
+    /// sender is dropped and then drops it there (a runtime must not be
+    /// dropped from async context). The workers hold the clones, so the
+    /// connection outlives shutdown until the last in-flight handler has
+    /// published its reply.
+    fn spawn_ingestion_runtime(
+    ) -> eyre::Result<(tokio::runtime::Handle, std::sync::mpsc::Sender<()>)> {
         let (handle_tx, handle_rx) = std::sync::mpsc::sync_channel(1);
+        let (alive_tx, alive_rx) = std::sync::mpsc::channel::<()>();
         std::thread::Builder::new()
             .name("dawnflow-ingestion".into())
             .spawn(move || {
@@ -381,11 +443,10 @@ impl NatsDispatcher {
                     }
                 };
                 let _ = handle_tx.send(Ok(rt.handle().clone()));
-                rt.block_on(async {
-                    elegant_departure::get_shutdown_guard().wait().await;
-                });
+                let _ = alive_rx.recv();
+                drop(rt);
             })?;
-        Ok(handle_rx.recv()??)
+        Ok((handle_rx.recv()??, alive_tx))
     }
 
     pub async fn start_dispatcher<S: Clone + Sync + Send + 'static>(
@@ -405,9 +466,14 @@ impl NatsDispatcher {
         mut join_set: JoinSet<()>,
         config: DispatcherConfig,
     ) -> eyre::Result<JoinSet<()>> {
+        let first_connect = Arc::new(AtomicBool::new(true));
+        let on_reconnect = config.on_reconnect.clone();
         let options = ConnectOptions::new()
             .subscription_capacity(config.subscription_capacity.max(1))
-            .event_callback(|event| async move {
+            .event_callback(move |event| {
+                let first_connect = first_connect.clone();
+                let on_reconnect = on_reconnect.clone();
+                async move {
                 match event {
                     Event::SlowConsumer(sid) => tracing::error!(
                         "NATS client DROPPED messages on subscription {sid} (buffer full) — \
@@ -417,17 +483,25 @@ impl NatsDispatcher {
                     Event::Disconnected => {
                         tracing::warn!("NATS connection lost — messages published meanwhile may be missed")
                     }
-                    Event::Connected => tracing::info!("NATS connection (re)established"),
+                    Event::Connected => {
+                        tracing::info!("NATS connection (re)established");
+                        if !first_connect.swap(false, Ordering::SeqCst) {
+                            if let Some(on_reconnect) = &on_reconnect {
+                                on_reconnect();
+                            }
+                        }
+                    }
                     Event::ServerError(err) => tracing::error!("NATS server error: {err}"),
                     Event::ClientError(err) => tracing::error!("NATS client error: {err}"),
                     other => tracing::info!("NATS connection event: {other}"),
+                }
                 }
             });
         let (server, options) = connection::configure(nats_url, options).await?;
         // connect on the ingestion runtime so the async-nats connection
         // handler task lives on its threads, immune to main-runtime
         // saturation by handler workloads
-        let ingest = Self::spawn_ingestion_runtime()?;
+        let (ingest, alive) = Self::spawn_ingestion_runtime()?;
         let client = match ingest
             .spawn(async move { options.connect(server).await })
             .await?
@@ -437,20 +511,25 @@ impl NatsDispatcher {
         };
 
         // (subject, handlers, with_reply); only request handlers get a reply
-        // subject to answer to
-        let mut endpoints: Vec<(String, Vec<NatsHandlerArc<S>>, bool)> = Vec::new();
+        // subject to answer to. Consumers and request handlers are queue
+        // subscribers (the subject is the queue group), so of several
+        // replicas exactly one handles each message; subscribers all get it.
+        let mut endpoints: Vec<(String, Vec<NatsHandlerArc<S>>, bool, bool)> = Vec::new();
         for (name, handler) in reg.consumers {
-            endpoints.push((format!("consumer.{}", name), vec![handler], false));
+            endpoints.push((format!("consumer.{}", name), vec![handler], false, true));
         }
         for (name, handlers) in reg.subscribers {
-            endpoints.push((format!("subscriber.{}", name), handlers, false));
+            endpoints.push((format!("subscriber.{}", name), handlers, false, false));
         }
         for (name, handler) in reg.handlers {
-            endpoints.push((format!("request.{}", name), vec![handler], true));
+            endpoints.push((format!("request.{}", name), vec![handler], true, true));
         }
 
-        for (subject, handlers, with_reply) in endpoints {
-            let sub = client.subscribe(subject.clone()).await?;
+        for (subject, handlers, with_reply, queued) in endpoints {
+            let sub = match queued {
+                true => client.queue_subscribe(subject.clone(), subject.clone()).await?,
+                false => client.subscribe(subject.clone()).await?,
+            };
             let backlog = Backlog::new(subject.clone(), config.backlog_warn_threshold);
             let (tx, rx) = queue(config.queue_capacity);
             ingest.spawn(Self::pump_reader(sub, tx, backlog.clone()));
@@ -462,12 +541,27 @@ impl NatsDispatcher {
                 with_reply,
                 backlog,
             };
+            let (alive, client) = (alive.clone(), client.clone());
+            // replies are only queued in the client: flush them before the
+            // last worker lets the connection go
+            let flushed = async move {
+                if tokio::time::timeout(REPLY_FLUSH_TIMEOUT, client.flush()).await.is_err() {
+                    tracing::warn!("flushing the last NATS replies timed out");
+                }
+                drop(alive);
+            };
             match config.mode {
                 ExecutionMode::Concurrent { max_in_flight } => {
-                    join_set.spawn(Self::pump_concurrent_worker(rx, ctx, max_in_flight));
+                    join_set.spawn(async move {
+                        Self::pump_concurrent_worker(rx, ctx, max_in_flight).await;
+                        flushed.await;
+                    });
                 }
                 ExecutionMode::Ordered => {
-                    join_set.spawn(Self::pump_ordered_worker(rx, ctx));
+                    join_set.spawn(async move {
+                        Self::pump_ordered_worker(rx, ctx).await;
+                        flushed.await;
+                    });
                 }
             }
         }

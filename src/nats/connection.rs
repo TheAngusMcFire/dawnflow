@@ -25,6 +25,10 @@
 //!
 //! Any `tls_*` parameter forces TLS even with the `nats://` scheme. Special
 //! characters in user names and passwords must be percent-encoded.
+//!
+//! Several servers of one cluster are separated by commas
+//! (`nats://u:p@a:4222,nats://b:4222`); credentials and parameters are taken
+//! from the first entry.
 
 use std::path::PathBuf;
 
@@ -66,7 +70,7 @@ enum Auth {
 /// credentials nor query parameters.
 #[derive(Debug)]
 struct ConnectionString {
-    server: Url,
+    servers: Vec<Url>,
     auth: Auth,
     tls_required: bool,
     tls_first: bool,
@@ -84,6 +88,16 @@ fn decode(value: &str) -> Result<String, ConnectionStringError> {
 
 impl ConnectionString {
     fn parse(input: &str) -> Result<Self, ConnectionStringError> {
+        let mut entries = input.split(',').map(str::trim).filter(|e| !e.is_empty());
+        let first = entries.next().ok_or(ConnectionStringError::MissingHost)?;
+        let mut parsed = Self::parse_one(first)?;
+        for entry in entries {
+            parsed.servers.extend(Self::parse_one(entry)?.servers);
+        }
+        Ok(parsed)
+    }
+
+    fn parse_one(input: &str) -> Result<Self, ConnectionStringError> {
         // keep accepting bare `host:port`, like async-nats does
         let mut url: Url = if input.contains("://") {
             input.parse()?
@@ -149,7 +163,7 @@ impl ConnectionString {
         url.set_path("");
 
         Ok(Self {
-            server: url,
+            servers: vec![url],
             auth,
             tls_required,
             tls_first,
@@ -162,7 +176,7 @@ impl ConnectionString {
     async fn apply(
         self,
         mut options: ConnectOptions,
-    ) -> Result<(ServerAddr, ConnectOptions), ConnectionStringError> {
+    ) -> Result<(Vec<ServerAddr>, ConnectOptions), ConnectionStringError> {
         options = match self.auth {
             Auth::None => options,
             Auth::UserPassword { user, password } => options.user_and_password(user, password),
@@ -185,8 +199,12 @@ impl ConnectionString {
             options = options.add_client_certificate(cert, key);
         }
         // the scheme was validated in `parse`, so this cannot fail
-        let server = ServerAddr::from_url(self.server)?;
-        Ok((server, options))
+        let servers = self
+            .servers
+            .into_iter()
+            .map(ServerAddr::from_url)
+            .collect::<Result<_, _>>()?;
+        Ok((servers, options))
     }
 }
 
@@ -199,12 +217,12 @@ fn install_crypto_provider() {
 }
 
 /// Parses `connection_string` and applies its credentials and TLS settings on
-/// top of `options`. Returns the server address to pass to
+/// top of `options`. Returns the server addresses to pass to
 /// [`ConnectOptions::connect`]. See the module docs for the accepted format.
 pub async fn configure(
     connection_string: &str,
     options: ConnectOptions,
-) -> Result<(ServerAddr, ConnectOptions), ConnectionStringError> {
+) -> Result<(Vec<ServerAddr>, ConnectOptions), ConnectionStringError> {
     ConnectionString::parse(connection_string)?
         .apply(options)
         .await
@@ -217,7 +235,7 @@ mod tests {
     #[test]
     fn plain() {
         let cs = ConnectionString::parse("nats://localhost:4222").unwrap();
-        assert_eq!(cs.server.as_str(), "nats://localhost:4222");
+        assert_eq!(cs.servers[0].as_str(), "nats://localhost:4222");
         assert_eq!(cs.auth, Auth::None);
         assert!(!cs.tls_required);
     }
@@ -225,7 +243,7 @@ mod tests {
     #[test]
     fn bare_host_port() {
         let cs = ConnectionString::parse("localhost:4222").unwrap();
-        assert_eq!(cs.server.as_str(), "nats://localhost:4222");
+        assert_eq!(cs.servers[0].as_str(), "nats://localhost:4222");
     }
 
     #[test]
@@ -238,7 +256,7 @@ mod tests {
                 password: "p:ss/w".into()
             }
         );
-        assert_eq!(cs.server.as_str(), "nats://nats.example:4222");
+        assert_eq!(cs.servers[0].as_str(), "nats://nats.example:4222");
     }
 
     #[test]
@@ -251,7 +269,7 @@ mod tests {
     fn tls_scheme() {
         let cs = ConnectionString::parse("tls://u:p@nats.example:4222").unwrap();
         assert!(cs.tls_required);
-        assert_eq!(cs.server.as_str(), "tls://nats.example:4222");
+        assert_eq!(cs.servers[0].as_str(), "tls://nats.example:4222");
     }
 
     #[test]
@@ -264,7 +282,20 @@ mod tests {
         assert!(cs.tls_first);
         assert_eq!(cs.tls_ca, Some("/ca.pem".into()));
         assert_eq!(cs.tls_client_cert, Some(("/c.pem".into(), "/k.pem".into())));
-        assert_eq!(cs.server.as_str(), "nats://nats.example");
+        assert_eq!(cs.servers[0].as_str(), "nats://nats.example");
+    }
+
+    #[test]
+    fn server_lists_take_the_settings_of_the_first() {
+        let cs = ConnectionString::parse("tls://u:p@a:4222, nats://b:4222,").unwrap();
+        let servers: Vec<_> = cs.servers.iter().map(Url::as_str).collect();
+        assert_eq!(servers, ["tls://a:4222", "nats://b:4222"]);
+        assert!(cs.tls_required);
+        assert!(matches!(
+            ConnectionString::parse("nats://a:4222,http://b"),
+            Err(ConnectionStringError::UnsupportedScheme(_))
+        ));
+        assert!(matches!(ConnectionString::parse(" , "), Err(ConnectionStringError::MissingHost)));
     }
 
     #[test]

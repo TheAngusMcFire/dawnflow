@@ -2,6 +2,10 @@ pub mod connection;
 pub mod dispatcher;
 pub mod publisher_backend;
 
+/// Header of an empty reply telling the requester that its request failed
+/// (handler error, panic, undecodable request, unsendable response).
+pub const ERROR_HEADER: &str = "Dawnflow-Error";
+
 use async_nats::Subject;
 use bytes::Bytes;
 use serde::{de::DeserializeOwned, Serialize};
@@ -15,13 +19,14 @@ impl<T: Serialize + Send + Sync + 'static> IntoResponse<NatsMetadata, NatsRespon
     for Result<T, eyre::Report>
 {
     fn into_response(self, metadata: &NatsMetadata) -> Response<NatsResponse> {
-        match self {
-            Ok(p) => Response {
+        let encoded = self.and_then(|p| rmp_serde::to_vec_named(&p).map_err(eyre::Report::from));
+        match encoded {
+            Ok(response) => Response {
                 error_scope: None,
                 success: true,
                 report: None,
                 payload: Some(NatsResponse {
-                    response: rmp_serde::to_vec(&p).unwrap(),
+                    response,
                     subject: Some(metadata.subject.clone()),
                     reply: metadata.reply.clone(),
                 }),

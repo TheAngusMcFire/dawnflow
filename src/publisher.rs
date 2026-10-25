@@ -25,6 +25,20 @@ pub enum PublisherError {
     NatsFlushError(#[from] async_nats::client::FlushError),
     #[error("operation timed out")]
     Timeout,
+    #[error("`{0}` can't be part of a NATS subject (no `.`, `*`, `>`, whitespace)")]
+    InvalidSubject(String),
+    /// the request reached a handler, which failed (or its reply couldn't be sent)
+    #[error("the handler failed: {0}")]
+    Remote(String),
+}
+
+/// Whether `token` can be one segment of a NATS subject: not empty, no `.`,
+/// `*`, `>`, whitespace or control characters.
+pub fn is_subject_token(token: &str) -> bool {
+    !token.is_empty()
+        && !token
+            .chars()
+            .any(|c| matches!(c, '.' | '*' | '>') || c.is_whitespace() || c.is_control())
 }
 
 pub struct PubSubOptions {
@@ -172,11 +186,17 @@ impl Publisher {
 
     /// Computes the routing key for a message. Without a target this is just the
     /// type name (no allocation); with a target it is the composite `{type}.{target}`.
-    fn routing_name<T>(target: &Option<String>) -> std::borrow::Cow<'static, str> {
+    fn routing_name<T>(
+        target: &Option<String>,
+    ) -> Result<std::borrow::Cow<'static, str>, PublisherError> {
         let base = Self::get_obj_name::<T>();
+        if !is_subject_token(base) {
+            return Err(PublisherError::InvalidSubject(base.to_string()));
+        }
         match target {
-            Some(t) => std::borrow::Cow::Owned(format!("{base}.{t}")),
-            None => std::borrow::Cow::Borrowed(base),
+            Some(t) if !is_subject_token(t) => Err(PublisherError::InvalidSubject(t.clone())),
+            Some(t) => Ok(std::borrow::Cow::Owned(format!("{base}.{t}"))),
+            None => Ok(std::borrow::Cow::Borrowed(base)),
         }
     }
 
@@ -186,7 +206,7 @@ impl Publisher {
             PublisherSerializer::InMemory => panic!(),
             PublisherSerializer::Binary => {
                 let mut data = Vec::new();
-                req.serialize(&mut rmp_serde::Serializer::new(&mut data))
+                req.serialize(&mut rmp_serde::Serializer::new(&mut data).with_struct_map())
                     .map_err(|x| PublisherError::Serde(x.to_string()))?;
                 Ok(data)
             }
@@ -260,7 +280,7 @@ impl Publisher {
         use crate::in_memory_publisher_backend::SubscriberCloneFactory;
 
         let opts = f(PubSubOptions::default());
-        let name = Self::routing_name::<T>(&opts.target);
+        let name = Self::routing_name::<T>(&opts.target)?;
         match &self.backend {
             PublisherBackend::InMemory { backend } => {
                 let sub_fact = SubscriberCloneFactory::<T> {
@@ -290,7 +310,7 @@ impl Publisher {
         f: impl FnOnce(PubConsOptions) -> PubConsOptions,
     ) -> Result<(), PublisherError> {
         let opts = f(PubConsOptions::default());
-        let name = Self::routing_name::<T>(&opts.target);
+        let name = Self::routing_name::<T>(&opts.target)?;
         match &self.backend {
             PublisherBackend::InMemory { backend } => {
                 backend
@@ -319,7 +339,7 @@ impl Publisher {
         f: impl FnOnce(PubReqOptions) -> PubReqOptions,
     ) -> Result<TResp, PublisherError> {
         let opts = f(PubReqOptions::default());
-        let name = Self::routing_name::<TReq>(&opts.target);
+        let name = Self::routing_name::<TReq>(&opts.target)?;
         match &self.backend {
             PublisherBackend::InMemory { backend } => {
                 let res = backend
@@ -374,7 +394,7 @@ impl Publisher {
         use crate::in_memory_publisher_backend::SubscriberCloneFactory;
 
         let opts = f(PubSubOptions::default());
-        let name = Self::routing_name::<T>(&opts.target);
+        let name = Self::routing_name::<T>(&opts.target)?;
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
@@ -401,7 +421,7 @@ impl Publisher {
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
-        let name = Self::routing_name::<T>(&opts.target);
+        let name = Self::routing_name::<T>(&opts.target)?;
         backend
             .read()
             .await
@@ -421,7 +441,7 @@ impl Publisher {
         let PublisherBackend::InMemory { backend } = &self.backend else {
             panic!()
         };
-        let name = Self::routing_name::<TReq>(&opts.target);
+        let name = Self::routing_name::<TReq>(&opts.target)?;
         let res = backend
             .read()
             .await
@@ -464,5 +484,73 @@ impl Publisher {
             },
             serializer: PublisherSerializer::Binary,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+
+    #[test]
+    fn subject_tokens() {
+        assert!(is_subject_token("ModelTestRequest"));
+        assert!(is_subject_token("stack-1_a"));
+        for invalid in ["", "a.b", "a b", "*", ">", "a\r\nPUB x 1", "X<A, B>"] {
+            assert!(!is_subject_token(invalid), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn invalid_targets_and_type_names_are_refused() {
+        struct Plain;
+        struct Generic<A, B>(A, B);
+        assert!(Publisher::routing_name::<Plain>(&None).is_ok());
+        assert_eq!(
+            Publisher::routing_name::<Plain>(&Some("t1".into())).unwrap(),
+            "Plain.t1"
+        );
+        assert!(matches!(
+            Publisher::routing_name::<Plain>(&Some("a b".into())),
+            Err(PublisherError::InvalidSubject(_))
+        ));
+        assert!(matches!(
+            Publisher::routing_name::<Generic<u8, u16>>(&None),
+            Err(PublisherError::InvalidSubject(_))
+        ));
+    }
+
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct V1 {
+        limit: u64,
+        spent: u64,
+    }
+
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct V2 {
+        spent: u64,
+        limit: u64,
+        #[serde(default)]
+        note: Option<String>,
+    }
+
+    fn named<T: Serialize>(value: &T) -> Vec<u8> {
+        let mut data = Vec::new();
+        value
+            .serialize(&mut rmp_serde::Serializer::new(&mut data).with_struct_map())
+            .unwrap();
+        data
+    }
+
+    #[test]
+    fn named_fields_survive_added_and_reordered_fields() {
+        let v1 = V1 { limit: 100, spent: 5 };
+        let v2: V2 = rmp_serde::from_slice(&named(&v1)).unwrap();
+        assert_eq!((v2.limit, v2.spent, v2.note.as_deref()), (100, 5, None));
+        let back: V1 = rmp_serde::from_slice(&named(&v2)).unwrap();
+        assert_eq!(back, v1);
+        let from_old_sender: V1 = rmp_serde::from_slice(&rmp_serde::to_vec(&v1).unwrap()).unwrap();
+        assert_eq!(from_old_sender, v1, "arrays of older senders still decode");
     }
 }
