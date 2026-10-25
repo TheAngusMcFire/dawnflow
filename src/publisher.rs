@@ -32,13 +32,17 @@ pub enum PublisherError {
     Remote(String),
 }
 
-/// Whether `token` can be one segment of a NATS subject: not empty, no `.`,
-/// `*`, `>`, whitespace or control characters.
+/// Whether `token` can be one segment of a NATS subject: not empty, not the
+/// wildcard `*` or `>`, no `.`, whitespace or control characters. Always true
+/// for the in-memory backend, which has no subjects.
 pub fn is_subject_token(token: &str) -> bool {
-    !token.is_empty()
-        && !token
-            .chars()
-            .any(|c| matches!(c, '.' | '*' | '>') || c.is_whitespace() || c.is_control())
+    !cfg!(feature = "nats")
+        || (!token.is_empty()
+            && token != "*"
+            && token != ">"
+            && !token
+                .chars()
+                .any(|c| c == '.' || c.is_whitespace() || c.is_control()))
 }
 
 pub struct PubSubOptions {
@@ -500,6 +504,7 @@ mod tests {
         for invalid in ["", "a.b", "a b", "*", ">", "a\r\nPUB x 1", "X<A, B>"] {
             assert!(!is_subject_token(invalid), "{invalid:?}");
         }
+        assert!(is_subject_token("Foo>"), "a generic type's last segment");
     }
 
     #[test]

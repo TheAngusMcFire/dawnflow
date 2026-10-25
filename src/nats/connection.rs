@@ -27,8 +27,8 @@
 //! characters in user names and passwords must be percent-encoded.
 //!
 //! Several servers of one cluster are separated by commas
-//! (`nats://u:p@a:4222,nats://b:4222`); credentials and parameters are taken
-//! from the first entry.
+//! (`nats://u:p@a:4222,nats://b:4222`); credentials and parameters go on the
+//! first entry, later entries carrying any are refused.
 
 use std::path::PathBuf;
 
@@ -56,6 +56,8 @@ pub enum ConnectionStringError {
     IncompleteClientCertificate,
     #[error("could not load NATS credentials file: {0}")]
     CredentialsFile(#[from] std::io::Error),
+    #[error("credentials and parameters of a NATS server list belong on its first entry")]
+    SettingsOnLaterServer,
 }
 
 /// Authentication taken from the user info part of the URL.
@@ -92,7 +94,16 @@ impl ConnectionString {
         let first = entries.next().ok_or(ConnectionStringError::MissingHost)?;
         let mut parsed = Self::parse_one(first)?;
         for entry in entries {
-            parsed.servers.extend(Self::parse_one(entry)?.servers);
+            let later = Self::parse_one(entry)?;
+            let plain = later.auth == Auth::None
+                && !later.tls_first
+                && later.tls_ca.is_none()
+                && later.tls_client_cert.is_none()
+                && later.creds.is_none();
+            if !plain {
+                return Err(ConnectionStringError::SettingsOnLaterServer);
+            }
+            parsed.servers.extend(later.servers);
         }
         Ok(parsed)
     }
@@ -296,6 +307,10 @@ mod tests {
             Err(ConnectionStringError::UnsupportedScheme(_))
         ));
         assert!(matches!(ConnectionString::parse(" , "), Err(ConnectionStringError::MissingHost)));
+        assert!(matches!(
+            ConnectionString::parse("nats://a:4222,nats://u:p@b:4222"),
+            Err(ConnectionStringError::SettingsOnLaterServer)
+        ));
     }
 
     #[test]

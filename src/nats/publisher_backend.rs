@@ -109,7 +109,11 @@ impl BytePublisherBackend for NatsPublisherBackend {
                 .send_request(format!("request.{}", name).to_subject(), request),
         )
         .await
-        .map_err(|_| PublisherError::Timeout)??;
+        .map_err(|_| PublisherError::Timeout)?
+        .map_err(|err| match err.kind() {
+            async_nats::RequestErrorKind::TimedOut => PublisherError::Timeout,
+            _ => PublisherError::NatsRequestError(err),
+        })?;
         if let Some(error) = message
             .headers
             .as_ref()

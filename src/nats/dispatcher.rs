@@ -29,6 +29,9 @@ type NatsHandlerArc<S> = HandlerArc<NatsPayload, NatsMetadata, S, NatsResponse>;
 
 /// How long a worker that ended waits for its queued replies to be written.
 const REPLY_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// After shutdown the connection is kept this long at most for the replies of
+/// the remaining handlers: while NATS is unreachable their publishes block.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// How the dispatcher executes handler invocations for a single message type.
 #[derive(Clone, Copy, Debug)]
@@ -72,7 +75,9 @@ pub struct DispatcherConfig {
     pub backlog_warn_threshold: usize,
     /// Called after the connection to NATS was re-established (not on the
     /// first connect). Messages published while disconnected are lost (core
-    /// NATS keeps nothing), so this is the place to reload cached state.
+    /// NATS keeps nothing), so this is the place to reload cached state. It
+    /// runs on the connection's event task: it must return quickly (spawn or
+    /// notify, don't block), and the subscriptions may not be restored yet.
     pub on_reconnect: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -419,14 +424,14 @@ impl NatsDispatcher {
     /// overflow, which silently drops messages.
     ///
     /// The owning thread keeps the runtime until every clone of the returned
-    /// sender is dropped and then drops it there (a runtime must not be
-    /// dropped from async context). The workers hold the clones, so the
-    /// connection outlives shutdown until the last in-flight handler has
-    /// published its reply.
+    /// sender is dropped, after shutdown at most [`SHUTDOWN_GRACE`], and then
+    /// drops it there (a runtime must not be dropped from async context). The
+    /// workers hold the clones, so the connection outlives shutdown until the
+    /// last in-flight handler has published its reply.
     fn spawn_ingestion_runtime(
-    ) -> eyre::Result<(tokio::runtime::Handle, std::sync::mpsc::Sender<()>)> {
+    ) -> eyre::Result<(tokio::runtime::Handle, mpsc::UnboundedSender<()>)> {
         let (handle_tx, handle_rx) = std::sync::mpsc::sync_channel(1);
-        let (alive_tx, alive_rx) = std::sync::mpsc::channel::<()>();
+        let (alive_tx, mut alive_rx) = mpsc::unbounded_channel::<()>();
         std::thread::Builder::new()
             .name("dawnflow-ingestion".into())
             .spawn(move || {
@@ -443,7 +448,16 @@ impl NatsDispatcher {
                     }
                 };
                 let _ = handle_tx.send(Ok(rt.handle().clone()));
-                let _ = alive_rx.recv();
+                rt.block_on(async {
+                    let shutdown = elegant_departure::get_shutdown_guard();
+                    select! {
+                        _ = alive_rx.recv() => return,
+                        _ = shutdown.wait() => {}
+                    }
+                    if tokio::time::timeout(SHUTDOWN_GRACE, alive_rx.recv()).await.is_err() {
+                        tracing::warn!("NATS replies still pending after the shutdown grace are dropped");
+                    }
+                });
                 drop(rt);
             })?;
         Ok((handle_rx.recv()??, alive_tx))

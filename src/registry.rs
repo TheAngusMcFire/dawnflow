@@ -7,8 +7,8 @@ use crate::{
 
 /// The routing key of a message type, `{type}` or `{type}.{target}`. Panics
 /// at registration when a part can't be a NATS subject token: a target with
-/// `.`, `*`, `>` or whitespace would subscribe to other subjects (or break the
-/// protocol line), as would a generic type name like `X<A, B>`.
+/// `.`, whitespace or a wildcard would subscribe to other subjects (or break
+/// the protocol line), as would a generic type name like `X<A, B>`.
 fn routing_key<T>(target: Option<&str>) -> String {
     let base = Publisher::get_obj_name::<T>();
     assert!(
