@@ -11,25 +11,25 @@ nats=[ "dep:async-nats", "dep:serde_bytes", "dep:bytes", "dep:url", "dep:percent
 dawnjection = ["dep:dawnjection"]
 
 [dependencies]
-serde_bytes = { version = "0.11", optional = true }
-async-trait = "0.1"
-elegant-departure = { version = "0.3", features = ["tokio"] }
-eyre = "0.6"
-rmp-serde = "1.3.0"
-serde = "1"
-serde_json = "1.0.138"
-thiserror = "2"
-tokio = { version = "1.43.0", features = ["full"] }
-tracing = "0.1"
+serde_bytes = { version = "0.11.19", optional = true }
+async-trait = "0.1.92"
+elegant-departure = { version = "0.3.2", features = ["tokio"] }
+eyre = "0.6.14"
+rmp-serde = "1.3.1"
+serde = "1.0.229"
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["full"] }
+tracing = "0.1.44"
 
-async-nats = { version = "0.42", optional = true }
-bytes = { version = "1", optional = true }
-url = { version = "2", optional = true }
-percent-encoding = { version = "2", optional = true }
+async-nats = { version = "0.50", optional = true }
+bytes = { version = "1.12.1", optional = true }
+url = { version = "2.5.8", optional = true }
+percent-encoding = { version = "2.3.2", optional = true }
 # only used to pick ring as rustls crypto provider for TLS connections (see
 # `src/nats/connection.rs`); same provider async-nats is built with
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
-futures = "0.3.31"
+futures = "0.3.34"
 
 # Optional dawnjection DI integration (see `src/dawnjection.rs`). Pinned by tag so
 # dawnflow controls which dawnjection it integrates against; dawnjection itself no
@@ -37,7 +37,7 @@ futures = "0.3.31"
 dawnjection = { git = "https://github.com/TheAngusMcFire/dawnjection.git", tag = "0.10.0", optional = true }
 
 [dev-dependencies]
-tracing-subscriber = { version = "0.3" }
+tracing-subscriber = { version = "0.3.23" }
 
 [[example]]
 name = "in_memory"
